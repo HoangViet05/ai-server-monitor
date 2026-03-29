@@ -1,0 +1,22 @@
+{
+  "name": "server-monitor",
+  "version": "1.0.0",
+  "description": "Server monitoring dashboard via Tailscale",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "ejs": "^3.1.10",
+    "express": "^4.21.0",
+    "node-ssh": "^13.2.0",
+    "socket.io": "^4.7.5",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  }
+}
