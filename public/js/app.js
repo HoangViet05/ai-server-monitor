@@ -641,6 +641,10 @@ const App = (() => {
 
   function closeModal() {
     document.getElementById('modal-add-server').classList.add('hidden');
+    const saveBtn = document.querySelector('#form-server .btn-primary');
+    const statusEl = document.getElementById('form-connection-status');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = ''; }
   }
 
   function handleFormSubmit(e) {
