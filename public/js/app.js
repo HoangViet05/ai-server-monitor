@@ -795,8 +795,25 @@ const App = (() => {
     socket.on('server:status', (data) => {
       const { serverId, status } = data;
       const server = servers.find(s => s.id === serverId);
-      if (server) {
-        server.status = status;
+      if (!server) return;
+
+      const prevStatus = server.status;
+      server.status = status;
+
+      // Update card classes + dot in-place; only do a full re-render if status actually changed
+      const card = document.querySelector(`.server-card[data-id="${serverId}"]`);
+      if (card) {
+        card.classList.remove('online', 'offline');
+        card.classList.add(status);
+        const dot = card.querySelector('.status-dot');
+        if (dot) {
+          dot.classList.remove('online', 'offline');
+          dot.classList.add(status);
+        }
+      }
+
+      // Only re-render whole grid if status changed (footer text differs online vs offline)
+      if (prevStatus !== status) {
         renderGrid();
       }
 
