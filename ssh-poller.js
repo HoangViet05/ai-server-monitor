@@ -50,6 +50,8 @@ async function getConnection(server) {
 
   if (server.ssh_key_path) {
     config.privateKeyPath = server.ssh_key_path;
+    // If a password is also provided alongside a key, treat it as the key passphrase
+    if (server.ssh_password) config.passphrase = server.ssh_password;
   } else if (server.ssh_password) {
     config.password = server.ssh_password;
   }
@@ -586,6 +588,7 @@ async function testConnection(server) {
 
   if (server.ssh_key_path) {
     config.privateKeyPath = server.ssh_key_path;
+    if (server.ssh_password) config.passphrase = server.ssh_password;
   } else if (server.ssh_password) {
     config.password = server.ssh_password;
   }
