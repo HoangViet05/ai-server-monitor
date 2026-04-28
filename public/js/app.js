@@ -57,6 +57,10 @@ const App = (() => {
             <div class="metric-label">Temp</div>
             <div class="metric-value" id="card-temp-${s.id}">--</div>
           </div>
+          <div class="metric">
+            <div class="metric-label">Disk</div>
+            <div class="metric-value" id="card-disk-${s.id}">--</div>
+          </div>
           <div class="metric" id="card-igpu-wrap-${s.id}" style="display:none">
             <div class="metric-label" id="card-igpu-label-${s.id}">iGPU</div>
             <div class="metric-value" id="card-igpu-${s.id}">--</div>
@@ -156,6 +160,7 @@ const App = (() => {
     const cpuEl = document.getElementById(`card-cpu-${serverId}`);
     const ramEl = document.getElementById(`card-ram-${serverId}`);
     const tempEl = document.getElementById(`card-temp-${serverId}`);
+    const diskEl = document.getElementById(`card-disk-${serverId}`);
     const igpuEl = document.getElementById(`card-igpu-${serverId}`);
     const dgpuEl = document.getElementById(`card-dgpu-${serverId}`);
     if (cpuEl) cpuEl.textContent = m.cpu_percent != null ? m.cpu_percent.toFixed(1) + '%' : '--';
@@ -164,6 +169,18 @@ const App = (() => {
       const temp = m.cpu_temp;
       tempEl.textContent = temp != null ? temp + '°C' : 'N/A';
       tempEl.style.color = temp >= 80 ? '#ff1744' : temp >= 60 ? '#ff9100' : '#00e676';
+    }
+    if (diskEl) {
+      if (m.disk_total != null && m.disk_used != null && m.disk_total > 0) {
+        const usedGB = (m.disk_used / 1073741824).toFixed(0);
+        const totalGB = (m.disk_total / 1073741824).toFixed(0);
+        const pct = (m.disk_used / m.disk_total) * 100;
+        diskEl.textContent = `${usedGB}/${totalGB} GB (${pct.toFixed(0)}%)`;
+        diskEl.style.color = pct >= 90 ? '#ff1744' : pct >= 75 ? '#ff9100' : '#00e676';
+      } else {
+        diskEl.textContent = '--';
+        diskEl.style.color = '';
+      }
     }
     // iGPU
     if (igpuEl) {

@@ -121,6 +121,10 @@ function createTables() {
 
   // Migration — add gpu_names column to servers (JSON: {"igpu":"...","dgpu":"..."})
   try { db.exec('ALTER TABLE servers ADD COLUMN gpu_names TEXT'); } catch { /* already exists */ }
+
+  // Migration — add disk usage columns to metrics (root filesystem in bytes)
+  try { db.exec('ALTER TABLE metrics ADD COLUMN disk_total INTEGER'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN disk_used INTEGER'); } catch { /* already exists */ }
 }
 
 function prepareStatements() {
@@ -138,8 +142,8 @@ function prepareStatements() {
 
   // Metrics
   stmts.insertMetrics = db.prepare(`
-    INSERT INTO metrics (server_id, cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, dgpu_percent, dgpu_mem_used, dgpu_mem_total, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO metrics (server_id, cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, dgpu_percent, dgpu_mem_used, dgpu_mem_total, disk_total, disk_used, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmts.rawInsertMetric = db.prepare(`
     INSERT INTO metrics (server_id, cpu_percent, ram_total, ram_used, igpu_percent, igpu_mem_used, timestamp)
@@ -262,7 +266,7 @@ function updateGpuNames(serverId, gpuNamesJson) {
 function insertMetrics(serverId, m) {
   const now = Math.floor(Date.now() / 1000);
   const cpuCoresJson = m.cpu_cores ? JSON.stringify(m.cpu_cores) : null;
-  stmts.insertMetrics.run(serverId, m.cpu_percent, cpuCoresJson, m.cpu_temp ?? null, m.ram_total, m.ram_used, m.igpu_percent ?? null, m.igpu_mem_used ?? null, m.dgpu_percent ?? null, m.dgpu_mem_used ?? null, m.dgpu_mem_total ?? null, now);
+  stmts.insertMetrics.run(serverId, m.cpu_percent, cpuCoresJson, m.cpu_temp ?? null, m.ram_total, m.ram_used, m.igpu_percent ?? null, m.igpu_mem_used ?? null, m.dgpu_percent ?? null, m.dgpu_mem_used ?? null, m.dgpu_mem_total ?? null, m.disk_total ?? null, m.disk_used ?? null, now);
 }
 
 function _rawInsertMetric(serverId, cpu, ramTotal, ramUsed, igpu, igpuMem, timestamp) {

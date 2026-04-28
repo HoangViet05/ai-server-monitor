@@ -113,6 +113,9 @@ function buildStreamScript() {
     '    cat /proc/meminfo',
     '    echo "===TEMP==="',
     '    for z in /sys/class/thermal/thermal_zone*; do t=$(cat "$z/type" 2>/dev/null); v=$(cat "$z/temp" 2>/dev/null); echo "$t:$v"; done 2>/dev/null',
+    // Disk usage of root filesystem -- every tick (df is cheap)
+    '    echo "===DISK==="',
+    '    df -B1 -P / 2>/dev/null | tail -n 1',
     // iGPU: read from temp file -- every tick (instant read, no spawn)
     '    echo "===GPU==="',
     '    cat /tmp/.smon_gpu_$$ 2>/dev/null',
@@ -227,6 +230,15 @@ function processTick(serverId, tickData) {
 
   // Parse system metrics (CPU, RAM, Temp)
   const metrics = parseSysOutput(serverId, sysData);
+
+  // Parse disk usage
+  if (sections.DISK) {
+    const disk = parseDiskOutput(sections.DISK);
+    if (disk) {
+      metrics.disk_total = disk.disk_total;
+      metrics.disk_used = disk.disk_used;
+    }
+  }
 
   // Parse iGPU (Intel)
   if (sections.GPU) {
@@ -373,7 +385,7 @@ function handleStreamEnd(server, err) {
 /* ─── Parsers ─── */
 
 function parseSysOutput(serverId, output) {
-  const metrics = { cpu_percent: 0, cpu_cores: [], cpu_temp: null, ram_total: 0, ram_used: 0, igpu_percent: null, igpu_mem_used: null, dgpu_percent: null, dgpu_mem_used: null, dgpu_mem_total: null };
+  const metrics = { cpu_percent: 0, cpu_cores: [], cpu_temp: null, ram_total: 0, ram_used: 0, igpu_percent: null, igpu_mem_used: null, dgpu_percent: null, dgpu_mem_used: null, dgpu_mem_total: null, disk_total: null, disk_used: null };
 
   const sections = output.split('===MEMINFO===');
   const statSection = sections[0] || '';
@@ -505,6 +517,21 @@ function parseNvidiaGpuOutput(output) {
       dgpu_mem_used: Math.round(memUsed * 1048576), // MiB -> bytes
       dgpu_mem_total: Math.round(memTotal * 1048576)
     };
+  } catch { return null; }
+}
+
+// Parse df -B1 -P output: "Filesystem  1B-blocks  Used  Available  Capacity  Mounted on"
+function parseDiskOutput(output) {
+  try {
+    const line = output.split('\n').find(l => l.trim().length > 0);
+    if (!line) return null;
+    const parts = line.trim().split(/\s+/);
+    // POSIX df may wrap long filesystem names; columns are at the end
+    if (parts.length < 6) return null;
+    const total = parseInt(parts[parts.length - 5]);
+    const used = parseInt(parts[parts.length - 4]);
+    if (isNaN(total) || isNaN(used)) return null;
+    return { disk_total: total, disk_used: used };
   } catch { return null; }
 }
 
