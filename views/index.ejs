@@ -11,7 +11,7 @@
   <header>
     <h1>Server Monitor</h1>
     <div class="header-actions">
-      <button id="btn-test-socket" class="btn btn-test-socket">Test Socket</button>
+      <a href="/scoreboards" class="btn btn-test-socket">Scoreboards</a>
       <button id="btn-pull-all" class="btn btn-secondary">Pull All Servers</button>
       <button id="btn-add-server" class="btn btn-primary">+ Add Server</button>
     </div>
@@ -166,20 +166,6 @@
     </div>
   </div>
 
-  <!-- Test Socket Modal -->
-  <div id="modal-test-socket" class="modal hidden">
-    <div class="modal-content modal-large">
-      <div class="log-header">
-        <h2>Test Socket Mission</h2>
-        <div>
-          <button id="btn-stop-test-socket" class="btn btn-sm btn-danger hidden">Stop</button>
-          <button id="btn-close-test-socket" class="btn btn-sm">Close</button>
-        </div>
-      </div>
-      <div id="test-socket-content" class="log-content"></div>
-      <div id="test-socket-status" class="pull-status hidden"></div>
-    </div>
-  </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>

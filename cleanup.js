@@ -17,6 +17,9 @@ function run() {
     db.cleanupOldMetrics();
     db.cleanupExcessLogs();
     db.cleanupOldGitPulls();
+    for (const sb of db.getScoreboards()) {
+      db.cleanupExcessScoreboardLogs(sb.id);
+    }
     console.log(`[Cleanup] Done at ${new Date().toISOString()}`);
   } catch (err) {
     console.error(`[Cleanup] Error: ${err.message}`);

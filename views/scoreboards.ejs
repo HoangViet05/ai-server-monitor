@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scoreboards — Server Monitor</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="dashboard">
+  <header>
+    <h1>Scoreboards</h1>
+    <div class="header-actions">
+      <a href="/" class="btn btn-secondary">← Back to Servers</a>
+      <button id="btn-add-scoreboard" class="btn btn-primary">+ Add Scoreboard</button>
+    </div>
+  </header>
+
+  <div id="scoreboard-grid" class="server-grid"></div>
+
+  <!-- Add Scoreboard Modal -->
+  <div id="modal-add-scoreboard" class="modal hidden">
+    <div class="modal-content">
+      <h2>Add Scoreboard</h2>
+      <form id="form-scoreboard">
+        <label>Name</label>
+        <input type="text" id="form-sb-name" required placeholder="e.g. Table 1">
+        <label>Scoreboard ID</label>
+        <input type="text" id="form-sb-id" required placeholder="UUID">
+        <label>Script Type</label>
+        <select id="form-sb-script">
+          <option value="mission">mission</option>
+          <option value="academy">academy</option>
+        </select>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="button" id="btn-cancel-sb" class="btn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scoreboard Logs Modal -->
+  <div id="modal-sb-logs" class="modal hidden">
+    <div class="modal-content modal-large">
+      <div class="log-header">
+        <h2>Logs: <span id="sb-log-name"></span></h2>
+        <div>
+          <button id="btn-restart-sb" class="btn btn-sm">Restart</button>
+          <button id="btn-fullscreen-sb-logs" class="btn btn-sm" title="Toggle fullscreen">⛶ Fullscreen</button>
+          <button id="btn-close-sb-logs" class="btn btn-sm">Close</button>
+        </div>
+      </div>
+      <div id="sb-log-content" class="log-content"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/scoreboards.js"></script>
+</body>
+</html>

@@ -86,6 +86,25 @@ function createTables() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_git_pulls_server ON git_pulls(server_id, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS scoreboards (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      scoreboard_id TEXT NOT NULL,
+      script_type TEXT NOT NULL DEFAULT 'mission',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS scoreboard_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scoreboard_id TEXT NOT NULL,
+      stream TEXT NOT NULL,
+      message TEXT,
+      timestamp INTEGER NOT NULL,
+      FOREIGN KEY (scoreboard_id) REFERENCES scoreboards(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scoreboard_logs_id ON scoreboard_logs(scoreboard_id, id);
   `);
 
   // Migrations — add per-core CPU and temperature columns
@@ -147,6 +166,29 @@ function prepareStatements() {
   stmts.cleanupExcessLogs = db.prepare(`
     DELETE FROM pm2_logs WHERE id IN (
       SELECT id FROM pm2_logs WHERE server_id = ? AND app_name = ?
+      ORDER BY id DESC LIMIT -1 OFFSET 2000
+    )
+  `);
+
+  // Scoreboards
+  stmts.addScoreboard = db.prepare(`
+    INSERT INTO scoreboards (id, name, scoreboard_id, script_type, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmts.getScoreboard = db.prepare('SELECT * FROM scoreboards WHERE id = ?');
+  stmts.getScoreboards = db.prepare('SELECT * FROM scoreboards ORDER BY created_at ASC');
+  stmts.deleteScoreboard = db.prepare('DELETE FROM scoreboards WHERE id = ?');
+
+  stmts.insertScoreboardLog = db.prepare(`
+    INSERT INTO scoreboard_logs (scoreboard_id, stream, message, timestamp)
+    VALUES (?, ?, ?, ?)
+  `);
+  stmts.getScoreboardLogs = db.prepare(
+    'SELECT * FROM scoreboard_logs WHERE scoreboard_id = ? ORDER BY id DESC LIMIT ?'
+  );
+  stmts.cleanupExcessScoreboardLogs = db.prepare(`
+    DELETE FROM scoreboard_logs WHERE id IN (
+      SELECT id FROM scoreboard_logs WHERE scoreboard_id = ?
       ORDER BY id DESC LIMIT -1 OFFSET 2000
     )
   `);
@@ -286,6 +328,40 @@ function cleanupExcessLogs() {
   cleanup();
 }
 
+// --- Scoreboards ---
+
+function addScoreboard({ name, scoreboard_id, script_type }) {
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  stmts.addScoreboard.run(id, name, scoreboard_id, script_type || 'mission', now);
+  return getScoreboard(id);
+}
+
+function getScoreboard(id) {
+  return stmts.getScoreboard.get(id) || null;
+}
+
+function getScoreboards() {
+  return stmts.getScoreboards.all();
+}
+
+function deleteScoreboard(id) {
+  stmts.deleteScoreboard.run(id);
+}
+
+function insertScoreboardLog(scoreboardId, stream, message) {
+  const now = Math.floor(Date.now() / 1000);
+  stmts.insertScoreboardLog.run(scoreboardId, stream, message, now);
+}
+
+function getScoreboardLogs(scoreboardId, limit) {
+  return stmts.getScoreboardLogs.all(scoreboardId, limit || 500).reverse();
+}
+
+function cleanupExcessScoreboardLogs(scoreboardId) {
+  stmts.cleanupExcessScoreboardLogs.run(scoreboardId);
+}
+
 // --- Git Pulls ---
 
 function createGitPull(serverId) {
@@ -330,5 +406,7 @@ module.exports = {
   insertMetrics, getMetrics, cleanupOldMetrics, _rawInsertMetric,
   upsertPm2Apps, getPm2Apps,
   insertLogs, getLogs, cleanupExcessLogs,
-  createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls
+  createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls,
+  addScoreboard, getScoreboard, getScoreboards, deleteScoreboard,
+  insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs
 };

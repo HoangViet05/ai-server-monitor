@@ -828,46 +828,6 @@ const App = (() => {
       sshSessionActive = false;
     });
 
-    // Test socket events
-    socket.on('test-socket:output', (data) => {
-      const content = document.getElementById('test-socket-content');
-      if (content) {
-        const line = document.createElement('div');
-        line.textContent = data.data;
-        line.style.whiteSpace = 'pre-wrap';
-        content.appendChild(line);
-        content.scrollTop = content.scrollHeight;
-      }
-    });
-
-    socket.on('test-socket:done', (data) => {
-      const content = document.getElementById('test-socket-content');
-      const status = document.getElementById('test-socket-status');
-      const btn = document.getElementById('btn-test-socket');
-      const stopBtn = document.getElementById('btn-stop-test-socket');
-
-      if (content) {
-        const line = document.createElement('div');
-        line.style.color = data.code === 0 ? '#00e676' : '#ff5252';
-        line.style.fontWeight = 'bold';
-        line.style.marginTop = '8px';
-        line.textContent = `Process exited with code ${data.code}`;
-        content.appendChild(line);
-        content.scrollTop = content.scrollHeight;
-      }
-
-      if (status) {
-        status.textContent = data.code === 0 ? 'Completed' : `Exited (code ${data.code})`;
-        status.style.color = data.code === 0 ? '#00e676' : '#ff5252';
-        status.classList.remove('hidden');
-      }
-
-      btn.disabled = false;
-      btn.textContent = 'Test Socket';
-      testSocketRunning = false;
-      stopBtn.classList.add('hidden');
-    });
-
     // PM2 update events
     socket.on('pm2:update', (data) => {
       const { serverId, pm2Apps } = data;
@@ -902,9 +862,6 @@ const App = (() => {
     });
     document.getElementById('btn-ssh').addEventListener('click', handleOpenSSH);
     document.getElementById('btn-close-ssh').addEventListener('click', handleCloseSSH);
-    document.getElementById('btn-test-socket').addEventListener('click', handleTestSocket);
-    document.getElementById('btn-close-test-socket').addEventListener('click', closeTestSocketModal);
-    document.getElementById('btn-stop-test-socket').addEventListener('click', handleStopTestSocket);
     document.getElementById('btn-pull-code').addEventListener('click', handlePullCode);
     document.getElementById('btn-pull-all').addEventListener('click', handlePullAll);
     document.getElementById('btn-close-pull-logs').addEventListener('click', closePullLogs);
@@ -928,10 +885,6 @@ const App = (() => {
 
     document.getElementById('modal-pm2-logs').addEventListener('click', (e) => {
       if (e.target.classList.contains('modal')) App.LogModal.close();
-    });
-
-    document.getElementById('modal-test-socket').addEventListener('click', (e) => {
-      if (e.target.classList.contains('modal')) closeTestSocketModal();
     });
 
     // ESC key to close modals
@@ -1237,52 +1190,6 @@ const App = (() => {
       window.removeEventListener('resize', window._sshResizeHandler);
       window._sshResizeHandler = null;
     }
-  }
-
-  // --- Test Socket ---
-  let testSocketRunning = false;
-
-  function handleTestSocket() {
-    // If already running, just reopen the modal
-    if (testSocketRunning) {
-      document.getElementById('modal-test-socket').classList.remove('hidden');
-      return;
-    }
-
-    const btn = document.getElementById('btn-test-socket');
-    const content = document.getElementById('test-socket-content');
-    const status = document.getElementById('test-socket-status');
-    const stopBtn = document.getElementById('btn-stop-test-socket');
-
-    content.innerHTML = '';
-    status.classList.add('hidden');
-    document.getElementById('modal-test-socket').classList.remove('hidden');
-
-    btn.textContent = 'Running...';
-    testSocketRunning = true;
-    stopBtn.classList.remove('hidden');
-
-    fetch('/api/test-socket', { method: 'POST' })
-      .then(r => {
-        if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
-        return r.json();
-      })
-      .catch(err => {
-        content.innerHTML += `<div style="color:#ff5252">${esc(err.message)}</div>`;
-        btn.disabled = false;
-        btn.textContent = 'Test Socket';
-        testSocketRunning = false;
-        stopBtn.classList.add('hidden');
-      });
-  }
-
-  function handleStopTestSocket() {
-    fetch('/api/test-socket/stop', { method: 'POST' });
-  }
-
-  function closeTestSocketModal() {
-    // Just hide the modal, don't stop the process
-    document.getElementById('modal-test-socket').classList.add('hidden');
   }
 
   // --- CPU Cores ---

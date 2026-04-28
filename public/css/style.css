@@ -737,6 +737,8 @@ header h1 {
   max-height: 85vh;
   display: flex;
   flex-direction: column;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .modal-large.modal-fullscreen {
@@ -745,6 +747,7 @@ header h1 {
   max-height: 100vh;
   height: 100vh;
   border-radius: 0;
+  border: none;
 }
 
 .modal-large .log-header {
@@ -885,3 +888,37 @@ header h1 {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+/* Scoreboards page */
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: #666;
+  padding: 60px 20px;
+  font-size: 15px;
+}
+.card-meta {
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.card-meta .meta-label { color: #666; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+.card-meta .meta-value { color: #e0e0e0; }
+.card-meta .meta-mono {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: #888;
+  word-break: break-all;
+  margin-top: 2px;
+}
+.card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.card-actions .btn { flex: 1; }
+
+.log-entry.log-type-system .log-line-text { color: #7c4dff; font-style: italic; }
+.log-entry.log-type-err .log-line-text { color: #ff5252; }
+.log-entry.log-type-out .log-line-text { color: #e0e0e0; }
+

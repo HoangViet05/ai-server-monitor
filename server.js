@@ -10,6 +10,7 @@ const sshPoller = require('./ssh-poller');
 const sshTerminal = require('./ssh-terminal');
 const cleanup = require('./cleanup');
 const heartbeat = require('./heartbeat');
+const scoreboardMgr = require('./scoreboard-manager');
 
 // Initialize database
 db.init();
@@ -25,6 +26,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', apiRouter);
 app.get('/', (req, res) => {
   res.render('index');
+});
+app.get('/scoreboards', (req, res) => {
+  res.render('scoreboards');
 });
 
 // HTTP server
@@ -58,11 +62,16 @@ heartbeat.start(browserIo);
 // Cleanup job
 cleanup.start();
 
+// Scoreboard manager — resume all from DB
+scoreboardMgr.init(browserIo);
+scoreboardMgr.resumeAll();
+
 // Graceful shutdown
 function shutdown(signal) {
   console.log(`\n[Server] ${signal} received — shutting down gracefully...`);
   cleanup.stop();
   heartbeat.stop();
+  scoreboardMgr.stopAll();
   server.close(() => {
     db.close();
     console.log('[Server] Shutdown complete.');

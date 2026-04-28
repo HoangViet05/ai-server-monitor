@@ -1,12 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { spawn, execSync } = require('child_process');
 const db = require('../db');
 const gitOps = require('../git-operations');
 const pm2Ops = require('../pm2-operations');
 const sshPoller = require('../ssh-poller');
-
-let testSocketProcess = null;
+const scoreboardMgr = require('../scoreboard-manager');
 
 function isValidIp(ip) {
   const parts = ip.split('.');
@@ -270,62 +268,55 @@ router.post('/servers/:id/test-connection', async (req, res) => {
   }
 });
 
-// Run test_socket_mission.js script
-router.post('/test-socket', (req, res) => {
-  if (testSocketProcess) {
-    return res.status(409).json({ error: 'Script is already running' });
-  }
+// --- Scoreboards ---
 
-  const browserIo = req.app.get('browserIo');
-  const scriptPath = process.env.TEST_SOCKET_SCRIPT || 'H:\\Projects\\arena\\arena-ai-pool-be\\scripts\\test_socket_mission.js';
-
-  testSocketProcess = spawn(process.execPath, [scriptPath], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  browserIo.emit('test-socket:start');
-
-  testSocketProcess.stdout.on('data', (data) => {
-    browserIo.emit('test-socket:output', { data: data.toString() });
-  });
-
-  testSocketProcess.stderr.on('data', (data) => {
-    browserIo.emit('test-socket:output', { data: data.toString() });
-  });
-
-  testSocketProcess.on('close', (code) => {
-    browserIo.emit('test-socket:done', { code });
-    testSocketProcess = null;
-  });
-
-  testSocketProcess.on('error', (err) => {
-    browserIo.emit('test-socket:output', { data: `Error: ${err.message}\n` });
-    browserIo.emit('test-socket:done', { code: -1 });
-    testSocketProcess = null;
-  });
-
-  res.json({ status: 'started' });
+router.get('/scoreboards', (req, res) => {
+  const list = db.getScoreboards().map(sb => ({
+    ...sb,
+    running: scoreboardMgr.isRunning(sb.id),
+  }));
+  res.json(list);
 });
 
-// Stop test_socket_mission.js script
-router.post('/test-socket/stop', (req, res) => {
-  if (!testSocketProcess) {
-    return res.status(404).json({ error: 'No script running' });
+router.post('/scoreboards', (req, res) => {
+  const { name, scoreboard_id, script_type } = req.body;
+  if (!name || !scoreboard_id) {
+    return res.status(400).json({ error: 'name and scoreboard_id are required' });
+  }
+  if (script_type && !['mission', 'academy'].includes(script_type)) {
+    return res.status(400).json({ error: 'script_type must be mission or academy' });
   }
 
-  try {
-    // On Windows, kill the entire process tree
-    execSync(`taskkill /pid ${testSocketProcess.pid} /T /F`, { stdio: 'ignore' });
-  } catch (_) {
-    // Fallback
-    testSocketProcess.kill();
-  }
-  res.json({ status: 'stopping' });
+  const sb = db.addScoreboard({ name, scoreboard_id, script_type });
+  scoreboardMgr.start(sb);
+  res.status(201).json({ ...sb, running: true });
 });
 
-// Check if test socket script is running
-router.get('/test-socket/status', (req, res) => {
-  res.json({ running: !!testSocketProcess });
+router.delete('/scoreboards/:id', (req, res) => {
+  const sb = db.getScoreboard(req.params.id);
+  if (!sb) return res.status(404).json({ error: 'Scoreboard not found' });
+
+  scoreboardMgr.stop(req.params.id);
+  db.deleteScoreboard(req.params.id);
+  res.status(204).end();
+});
+
+router.get('/scoreboards/:id/logs', (req, res) => {
+  const sb = db.getScoreboard(req.params.id);
+  if (!sb) return res.status(404).json({ error: 'Scoreboard not found' });
+
+  const lines = parseInt(req.query.lines) || 500;
+  const logs = db.getScoreboardLogs(req.params.id, lines);
+  res.json(logs);
+});
+
+router.post('/scoreboards/:id/restart', (req, res) => {
+  const sb = db.getScoreboard(req.params.id);
+  if (!sb) return res.status(404).json({ error: 'Scoreboard not found' });
+
+  scoreboardMgr.stop(req.params.id);
+  setTimeout(() => scoreboardMgr.start(sb), 500);
+  res.json({ status: 'restarting' });
 });
 
 module.exports = router;
