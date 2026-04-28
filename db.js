@@ -3,13 +3,18 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 
 let db;
+const stmts = {}; // cached prepared statements
 
 function init(dbPath) {
   const resolvedPath = dbPath || path.join(__dirname, 'data', 'monitor.db');
   db = new Database(resolvedPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -16000');   // 16MB cache
+  db.pragma('temp_store = MEMORY');
   createTables();
+  prepareStatements();
   return db;
 }
 
@@ -23,6 +28,7 @@ function createTables() {
       ssh_user TEXT,
       ssh_key_path TEXT,
       ssh_password TEXT,
+      git_repo_path TEXT,
       status TEXT NOT NULL DEFAULT 'offline',
       last_seen INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL
@@ -67,7 +73,92 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_metrics_server_ts ON metrics(server_id, timestamp);
     CREATE INDEX IF NOT EXISTS idx_pm2_apps_server ON pm2_apps(server_id);
     CREATE INDEX IF NOT EXISTS idx_pm2_logs_server_app ON pm2_logs(server_id, app_name);
+
+    CREATE TABLE IF NOT EXISTS git_pulls (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      output TEXT,
+      conflict_detected INTEGER DEFAULT 0,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_git_pulls_server ON git_pulls(server_id, started_at DESC);
   `);
+
+  // Migrations — add per-core CPU and temperature columns
+  try { db.exec('ALTER TABLE metrics ADD COLUMN cpu_cores TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN cpu_temp REAL'); } catch { /* already exists */ }
+
+  // Migration — add git_repo_path column
+  try { db.exec('ALTER TABLE servers ADD COLUMN git_repo_path TEXT'); } catch { /* already exists */ }
+
+  // Migration — add discrete GPU columns to metrics
+  try { db.exec('ALTER TABLE metrics ADD COLUMN dgpu_percent REAL'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN dgpu_mem_used INTEGER'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN dgpu_mem_total INTEGER'); } catch { /* already exists */ }
+
+  // Migration — add gpu_names column to servers (JSON: {"igpu":"...","dgpu":"..."})
+  try { db.exec('ALTER TABLE servers ADD COLUMN gpu_names TEXT'); } catch { /* already exists */ }
+}
+
+function prepareStatements() {
+  // Servers
+  stmts.addServer = db.prepare(`
+    INSERT INTO servers (id, name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, status, last_seen, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offline', 0, ?)
+  `);
+  stmts.getServer = db.prepare('SELECT * FROM servers WHERE id = ?');
+  stmts.getServers = db.prepare('SELECT * FROM servers ORDER BY created_at ASC');
+  stmts.updateServerStatus = db.prepare('UPDATE servers SET status = ?, last_seen = ? WHERE id = ?');
+  stmts.deleteServer = db.prepare('DELETE FROM servers WHERE id = ?');
+  stmts.findServerByIp = db.prepare('SELECT * FROM servers WHERE ip = ?');
+  stmts.updateGpuNames = db.prepare('UPDATE servers SET gpu_names = ? WHERE id = ?');
+
+  // Metrics
+  stmts.insertMetrics = db.prepare(`
+    INSERT INTO metrics (server_id, cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, dgpu_percent, dgpu_mem_used, dgpu_mem_total, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.rawInsertMetric = db.prepare(`
+    INSERT INTO metrics (server_id, cpu_percent, ram_total, ram_used, igpu_percent, igpu_mem_used, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.getMetrics = db.prepare('SELECT * FROM metrics WHERE server_id = ? AND timestamp >= ? ORDER BY timestamp ASC');
+  stmts.cleanupOldMetrics = db.prepare('DELETE FROM metrics WHERE timestamp < ?');
+
+  // PM2 Apps
+  stmts.deletePm2Apps = db.prepare('DELETE FROM pm2_apps WHERE server_id = ?');
+  stmts.insertPm2App = db.prepare(`
+    INSERT INTO pm2_apps (server_id, pm_id, name, status, cpu, memory, uptime, restarts, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.getPm2Apps = db.prepare('SELECT * FROM pm2_apps WHERE server_id = ? ORDER BY pm_id ASC');
+
+  // PM2 Logs
+  stmts.insertLog = db.prepare(`
+    INSERT INTO pm2_logs (server_id, app_name, log_type, message, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmts.getLogs = db.prepare('SELECT * FROM pm2_logs WHERE server_id = ? AND app_name = ? ORDER BY id DESC LIMIT ?');
+  stmts.getDistinctLogApps = db.prepare('SELECT DISTINCT server_id, app_name FROM pm2_logs');
+  stmts.cleanupExcessLogs = db.prepare(`
+    DELETE FROM pm2_logs WHERE id IN (
+      SELECT id FROM pm2_logs WHERE server_id = ? AND app_name = ?
+      ORDER BY id DESC LIMIT -1 OFFSET 500
+    )
+  `);
+
+  // Git Pulls
+  stmts.createGitPull = db.prepare(`
+    INSERT INTO git_pulls (id, server_id, status, started_at)
+    VALUES (?, ?, 'running', ?)
+  `);
+  stmts.getGitPull = db.prepare('SELECT * FROM git_pulls WHERE id = ?');
+  stmts.getGitPulls = db.prepare('SELECT * FROM git_pulls WHERE server_id = ? ORDER BY started_at DESC LIMIT ?');
+  stmts.cleanupOldGitPulls = db.prepare('DELETE FROM git_pulls WHERE started_at < ?');
 }
 
 function close() {
@@ -76,26 +167,23 @@ function close() {
 
 // --- Servers ---
 
-function addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password }) {
+function addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path }) {
   const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
-  db.prepare(`
-    INSERT INTO servers (id, name, ip, mode, ssh_user, ssh_key_path, ssh_password, status, last_seen, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'offline', 0, ?)
-  `).run(id, name, ip, mode || 'agent', ssh_user || null, ssh_key_path || null, ssh_password || null, now);
+  stmts.addServer.run(id, name, ip, mode || 'agent', ssh_user || null, ssh_key_path || null, ssh_password || null, git_repo_path || null, now);
   return getServer(id);
 }
 
 function getServer(id) {
-  return db.prepare('SELECT * FROM servers WHERE id = ?').get(id) || null;
+  return stmts.getServer.get(id) || null;
 }
 
 function getServers() {
-  return db.prepare('SELECT * FROM servers ORDER BY created_at ASC').all();
+  return stmts.getServers.all();
 }
 
 function updateServer(id, fields) {
-  const allowed = ['name', 'ip', 'mode', 'ssh_user', 'ssh_key_path', 'ssh_password'];
+  const allowed = ['name', 'ip', 'mode', 'ssh_user', 'ssh_key_path', 'ssh_password', 'git_repo_path'];
   const updates = [];
   const values = [];
   for (const key of allowed) {
@@ -112,60 +200,52 @@ function updateServer(id, fields) {
 
 function updateServerStatus(id, status) {
   const now = Math.floor(Date.now() / 1000);
-  db.prepare('UPDATE servers SET status = ?, last_seen = ? WHERE id = ?').run(status, now, id);
+  stmts.updateServerStatus.run(status, now, id);
 }
 
 function deleteServer(id) {
-  db.prepare('DELETE FROM servers WHERE id = ?').run(id);
+  stmts.deleteServer.run(id);
 }
 
 function findServerByIp(ip) {
-  return db.prepare('SELECT * FROM servers WHERE ip = ?').get(ip) || null;
+  return stmts.findServerByIp.get(ip) || null;
+}
+
+function updateGpuNames(serverId, gpuNamesJson) {
+  stmts.updateGpuNames.run(gpuNamesJson, serverId);
 }
 
 // --- Metrics ---
 
 function insertMetrics(serverId, m) {
   const now = Math.floor(Date.now() / 1000);
-  db.prepare(`
-    INSERT INTO metrics (server_id, cpu_percent, ram_total, ram_used, igpu_percent, igpu_mem_used, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(serverId, m.cpu_percent, m.ram_total, m.ram_used, m.igpu_percent ?? null, m.igpu_mem_used ?? null, now);
+  const cpuCoresJson = m.cpu_cores ? JSON.stringify(m.cpu_cores) : null;
+  stmts.insertMetrics.run(serverId, m.cpu_percent, cpuCoresJson, m.cpu_temp ?? null, m.ram_total, m.ram_used, m.igpu_percent ?? null, m.igpu_mem_used ?? null, m.dgpu_percent ?? null, m.dgpu_mem_used ?? null, m.dgpu_mem_total ?? null, now);
 }
 
 function _rawInsertMetric(serverId, cpu, ramTotal, ramUsed, igpu, igpuMem, timestamp) {
-  db.prepare(`
-    INSERT INTO metrics (server_id, cpu_percent, ram_total, ram_used, igpu_percent, igpu_mem_used, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(serverId, cpu, ramTotal, ramUsed, igpu, igpuMem, timestamp);
+  stmts.rawInsertMetric.run(serverId, cpu, ramTotal, ramUsed, igpu, igpuMem, timestamp);
 }
 
 function getMetrics(serverId, hours) {
   const since = Math.floor(Date.now() / 1000) - hours * 3600;
-  return db.prepare(
-    'SELECT * FROM metrics WHERE server_id = ? AND timestamp >= ? ORDER BY timestamp ASC'
-  ).all(serverId, since);
+  return stmts.getMetrics.all(serverId, since);
 }
 
 function cleanupOldMetrics() {
-  const cutoff = Math.floor(Date.now() / 1000) - 24 * 3600;
-  db.prepare('DELETE FROM metrics WHERE timestamp < ?').run(cutoff);
+  const cutoff = Math.floor(Date.now() / 1000) - 48 * 3600;
+  stmts.cleanupOldMetrics.run(cutoff);
 }
 
 // --- PM2 Apps ---
 
 function upsertPm2Apps(serverId, apps) {
   const now = Math.floor(Date.now() / 1000);
-  const deleteStmt = db.prepare('DELETE FROM pm2_apps WHERE server_id = ?');
-  const insertStmt = db.prepare(`
-    INSERT INTO pm2_apps (server_id, pm_id, name, status, cpu, memory, uptime, restarts, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
 
   const upsert = db.transaction((serverId, apps) => {
-    deleteStmt.run(serverId);
+    stmts.deletePm2Apps.run(serverId);
     for (const app of apps) {
-      insertStmt.run(serverId, app.pm_id, app.name, app.status, app.cpu, app.memory, app.uptime, app.restarts, now);
+      stmts.insertPm2App.run(serverId, app.pm_id, app.name, app.status, app.cpu, app.memory, app.uptime, app.restarts, now);
     }
   });
 
@@ -173,21 +253,17 @@ function upsertPm2Apps(serverId, apps) {
 }
 
 function getPm2Apps(serverId) {
-  return db.prepare('SELECT * FROM pm2_apps WHERE server_id = ? ORDER BY pm_id ASC').all(serverId);
+  return stmts.getPm2Apps.all(serverId);
 }
 
 // --- PM2 Logs ---
 
 function insertLogs(serverId, appName, lines) {
   const now = Math.floor(Date.now() / 1000);
-  const stmt = db.prepare(`
-    INSERT INTO pm2_logs (server_id, app_name, log_type, message, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `);
 
   const insert = db.transaction((lines) => {
     for (const line of lines) {
-      stmt.run(serverId, appName, line.log_type, line.message, now);
+      stmts.insertLog.run(serverId, appName, line.log_type, line.message, now);
     }
   });
 
@@ -195,32 +271,64 @@ function insertLogs(serverId, appName, lines) {
 }
 
 function getLogs(serverId, appName, limit) {
-  return db.prepare(
-    'SELECT * FROM pm2_logs WHERE server_id = ? AND app_name = ? ORDER BY id DESC LIMIT ?'
-  ).all(serverId, appName, limit || 200).reverse();
+  return stmts.getLogs.all(serverId, appName, limit || 200).reverse();
 }
 
 function cleanupExcessLogs() {
-  const apps = db.prepare(
-    'SELECT DISTINCT server_id, app_name FROM pm2_logs'
-  ).all();
+  const apps = stmts.getDistinctLogApps.all();
 
-  const deleteStmt = db.prepare(`
-    DELETE FROM pm2_logs WHERE id IN (
-      SELECT id FROM pm2_logs WHERE server_id = ? AND app_name = ?
-      ORDER BY id DESC LIMIT -1 OFFSET 500
-    )
-  `);
+  const cleanup = db.transaction(() => {
+    for (const app of apps) {
+      stmts.cleanupExcessLogs.run(app.server_id, app.app_name);
+    }
+  });
 
-  for (const app of apps) {
-    deleteStmt.run(app.server_id, app.app_name);
+  cleanup();
+}
+
+// --- Git Pulls ---
+
+function createGitPull(serverId) {
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  stmts.createGitPull.run(id, serverId, now);
+  return getGitPull(id);
+}
+
+function updateGitPull(pullId, fields) {
+  const allowed = ['status', 'output', 'conflict_detected', 'completed_at'];
+  const updates = [];
+  const values = [];
+  for (const key of allowed) {
+    if (fields[key] !== undefined) {
+      updates.push(`${key} = ?`);
+      values.push(fields[key]);
+    }
   }
+  if (updates.length === 0) return getGitPull(pullId);
+  values.push(pullId);
+  db.prepare(`UPDATE git_pulls SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  return getGitPull(pullId);
+}
+
+function getGitPull(pullId) {
+  return stmts.getGitPull.get(pullId) || null;
+}
+
+function getGitPulls(serverId, limit = 10) {
+  return stmts.getGitPulls.all(serverId, limit);
+}
+
+function cleanupOldGitPulls() {
+  const cutoff = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
+  stmts.cleanupOldGitPulls.run(cutoff);
 }
 
 module.exports = {
   init, close,
-  addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp,
+  addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
   insertMetrics, getMetrics, cleanupOldMetrics, _rawInsertMetric,
   upsertPm2Apps, getPm2Apps,
-  insertLogs, getLogs, cleanupExcessLogs
+  insertLogs, getLogs, cleanupExcessLogs,
+  createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls
 };

@@ -1,0 +1,588 @@
+﻿const { NodeSSH } = require('node-ssh');
+const db = require('./db');
+
+const connections = new Map(); // serverId -> { ssh, failCount }
+const prevCpuData = new Map(); // serverId -> { cpu: {idle,total}, cores: { cpu0: {idle,total}, ... } }
+const activeStreams = new Map(); // serverId -> true
+const lastLogLines = new Map(); // serverId:appName -> last line message (dedup)
+const gpuNamesCache = new Map(); // serverId -> { igpu: "...", dgpu: "..." }
+let browserIo = null;
+
+function init(_browserIo) {
+  browserIo = _browserIo;
+}
+
+function startPolling(server) {
+  if (activeStreams.has(server.id)) return;
+  console.log(`[SSH] Start streaming ${server.name} (${server.ip})`);
+  activeStreams.set(server.id, true);
+  startStream(server);
+}
+
+function stopPolling(serverId) {
+  activeStreams.delete(serverId);
+  prevCpuData.delete(serverId);
+  gpuNamesCache.delete(serverId);
+  // Clean up lastLogLines entries for this server
+  for (const key of lastLogLines.keys()) {
+    if (key.startsWith(serverId + ':')) {
+      lastLogLines.delete(key);
+    }
+  }
+  const conn = connections.get(serverId);
+  if (conn && conn.ssh) {
+    conn.ssh.dispose();
+    connections.delete(serverId);
+  }
+}
+
+async function getConnection(server) {
+  let conn = connections.get(server.id);
+  if (conn && conn.ssh && conn.ssh.isConnected()) return conn.ssh;
+
+  const ssh = new NodeSSH();
+  const config = {
+    host: server.ip,
+    username: server.ssh_user || 'root',
+    readyTimeout: 10000,
+    keepaliveInterval: 60000,
+  };
+
+  if (server.ssh_key_path) {
+    config.privateKeyPath = server.ssh_key_path;
+  } else if (server.ssh_password) {
+    config.password = server.ssh_password;
+  }
+
+  await ssh.connect(config);
+
+  // Catch errors on the underlying ssh2 Client to prevent process crash
+  if (ssh.connection) {
+    ssh.connection.on('error', (err) => {
+      console.error(`[SSH] Connection error for ${server.name}: ${err.message}`);
+      // Dispose and let reconnect logic handle it
+      try { ssh.dispose(); } catch {}
+      connections.delete(server.id);
+    });
+  }
+
+  connections.set(server.id, { ssh, failCount: 0 });
+  return ssh;
+}
+
+// Build the streaming shell script that runs on the remote server
+function buildStreamScript() {
+  return [
+    // Detect CPU core count and taskset availability
+    'NCORES=$(nproc 2>/dev/null || echo 1)',
+    'if [ "$NCORES" -ge 2 ] && command -v taskset >/dev/null 2>&1; then',
+    '  LAST=$((NCORES - 1))',
+    '  PREV=$((NCORES - 2))',
+    '  TASKSET_CMD="taskset -c $PREV,$LAST"',
+    'else',
+    '  TASKSET_CMD=""',
+    'fi',
+    '',
+    // Detect GPU names once at startup via lspci
+    'IGPU_NAME=""',
+    'DGPU_NAME=""',
+    'if command -v lspci >/dev/null 2>&1; then',
+    '  IGPU_NAME=$(lspci | grep -iE "vga|display|3d" | grep -i intel | head -1 | sed "s/.*: //")',
+    '  DGPU_NAME=$(lspci | grep -iE "vga|display|3d" | grep -iv intel | head -1 | sed "s/.*: //")',
+    'fi',
+    // Fallback: get NVIDIA GPU name from nvidia-smi if lspci missed it
+    'if [ -z "$DGPU_NAME" ] && command -v nvidia-smi >/dev/null 2>&1; then',
+    '  DGPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)',
+    'fi',
+    '',
+    // Background iGPU sampling -- pinned to last 2 cores if taskset available
+    'if command -v intel_gpu_top >/dev/null 2>&1; then',
+    '  (while true; do ${TASKSET_CMD:+$TASKSET_CMD} timeout 3 intel_gpu_top -J -s 1800 -l 1 > /tmp/.smon_gpu_$$ 2>/dev/null || sleep 2; done) &',
+    '  GPID=$!',
+    '  trap "kill $GPID 2>/dev/null; rm -f /tmp/.smon_gpu_$$" EXIT',
+    'fi',
+    '',
+    // Main loop function -- run under taskset if available
+    'run_loop() {',
+    '  C=0',
+    '  while true; do',
+    '    echo "===TICK==="',
+    // Lightweight: CPU, RAM, Temp -- every tick (2s)
+    '    cat /proc/stat',
+    '    echo "===MEMINFO==="',
+    '    cat /proc/meminfo',
+    '    echo "===TEMP==="',
+    '    for z in /sys/class/thermal/thermal_zone*; do t=$(cat "$z/type" 2>/dev/null); v=$(cat "$z/temp" 2>/dev/null); echo "$t:$v"; done 2>/dev/null',
+    // iGPU: read from temp file -- every tick (instant read, no spawn)
+    '    echo "===GPU==="',
+    '    cat /tmp/.smon_gpu_$$ 2>/dev/null',
+    // dGPU: nvidia-smi is fast (~50ms), run inline
+    '    echo "===DGPU==="',
+    '    if command -v nvidia-smi >/dev/null 2>&1; then',
+    '      nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null',
+    '    fi',
+    // GPU names detected at startup
+    '    echo "===GPUNAMES==="',
+    '    echo "igpu:$IGPU_NAME"',
+    '    echo "dgpu:$DGPU_NAME"',
+    // PM2 process list -- every 3rd tick (6s)
+    '    C=$((C+1))',
+    '    if [ $((C % 3)) -eq 0 ]; then',
+    '      echo "===PM2==="',
+    '      pm2 jlist 2>/dev/null',
+    '    fi',
+    // PM2 logs -- every 5th tick (10s)
+    '    if [ $((C % 5)) -eq 0 ]; then',
+    '      echo "===PM2LOGS==="',
+    '      tail -n 500 -v $HOME/.pm2/logs/*.log 2>/dev/null',
+    '    fi',
+    '    echo "===END==="',
+    '    sleep 2',
+    '  done',
+    '}',
+    '',
+    'if [ -n "$TASKSET_CMD" ]; then',
+    '  $TASKSET_CMD sh -c "$(declare -f run_loop); run_loop"',
+    'else',
+    '  run_loop',
+    'fi',
+  ].join('\n');
+}
+
+async function startStream(server) {
+  if (!activeStreams.has(server.id)) return;
+
+  try {
+    const ssh = await getConnection(server);
+
+    if (!ssh.connection) throw new Error('SSH connection not available');
+
+    const script = buildStreamScript();
+
+    // Use raw ssh2 exec for streaming (avoids node-ssh memory accumulation)
+    const channel = await new Promise((resolve, reject) => {
+      ssh.connection.exec(script, (err, ch) => {
+        if (err) return reject(err);
+        resolve(ch);
+      });
+    });
+
+    let buffer = '';
+
+    channel.on('data', (chunk) => {
+      buffer += chunk.toString();
+      let idx;
+      while ((idx = buffer.indexOf('===END===')) !== -1) {
+        const tick = buffer.substring(0, idx);
+        buffer = buffer.substring(idx + 9);
+        if (buffer.startsWith('\n')) buffer = buffer.substring(1);
+        processTick(server.id, tick);
+      }
+    });
+
+    channel.stderr.on('data', () => {}); // ignore stderr
+
+    channel.on('close', () => {
+      handleStreamEnd(server);
+    });
+
+    // Mark online
+    db.updateServerStatus(server.id, 'online');
+    if (browserIo) {
+      browserIo.emit('server:status', { serverId: server.id, status: 'online', lastSeen: Math.floor(Date.now() / 1000) });
+    }
+    const conn = connections.get(server.id);
+    if (conn) conn.failCount = 0;
+
+  } catch (err) {
+    handleStreamEnd(server, err);
+  }
+}
+
+// Generic section splitter: splits tick data by ===MARKER=== delimiters
+function splitSections(data) {
+  const result = {};
+  const parts = data.split(/===([\w]+)===/);
+  // parts[0] is before first marker (sys section)
+  result.SYS = (parts[0] || '').trim();
+  for (let i = 1; i < parts.length; i += 2) {
+    const name = parts[i];
+    const content = (parts[i + 1] || '').trim();
+    result[name] = content;
+  }
+  return result;
+}
+
+function processTick(serverId, tickData) {
+  if (!activeStreams.has(serverId)) return;
+
+  // Remove ===TICK=== marker
+  const data = tickData.replace(/^[\s\S]*?===TICK===\n?/, '');
+
+  // Split into sections generically
+  const sections = splitSections(data);
+
+  // Reconstruct sys section (parseSysOutput expects MEMINFO/TEMP markers embedded)
+  const sysData = (sections.SYS || '') + '\n===MEMINFO===\n' + (sections.MEMINFO || '') + '\n===TEMP===\n' + (sections.TEMP || '');
+
+  // Parse system metrics (CPU, RAM, Temp)
+  const metrics = parseSysOutput(serverId, sysData);
+
+  // Parse iGPU (Intel)
+  if (sections.GPU) {
+    const gpuData = parseIntelGpuOutput(sections.GPU);
+    if (gpuData) {
+      metrics.igpu_percent = gpuData.igpu_percent;
+      metrics.igpu_mem_used = gpuData.igpu_mem_used;
+    }
+  }
+
+  // Parse dGPU (NVIDIA)
+  if (sections.DGPU) {
+    const dgpuData = parseNvidiaGpuOutput(sections.DGPU);
+    if (dgpuData) {
+      metrics.dgpu_percent = dgpuData.dgpu_percent;
+      metrics.dgpu_mem_used = dgpuData.dgpu_mem_used;
+      metrics.dgpu_mem_total = dgpuData.dgpu_mem_total;
+    }
+  }
+
+  // Parse GPU names and cache them
+  if (sections.GPUNAMES) {
+    const names = parseGpuNames(sections.GPUNAMES);
+    if (names.igpu || names.dgpu) {
+      gpuNamesCache.set(serverId, names);
+      // Update server record with GPU names (once, or when changed)
+      db.updateGpuNames(serverId, JSON.stringify(names));
+    }
+  }
+
+  // Attach cached GPU names to metrics for frontend
+  const cachedNames = gpuNamesCache.get(serverId);
+  if (cachedNames) {
+    metrics.gpu_names = cachedNames;
+  }
+
+  // Parse PM2 processes
+  let pm2Apps = [];
+  if (sections.PM2) {
+    try {
+      const raw = JSON.parse(sections.PM2);
+      pm2Apps = raw.map(p => ({
+        pm_id: p.pm_id,
+        name: p.name,
+        status: p.pm2_env ? p.pm2_env.status : 'unknown',
+        cpu: p.monit ? p.monit.cpu : 0,
+        memory: p.monit ? p.monit.memory : 0,
+        uptime: p.pm2_env ? (Date.now() - p.pm2_env.pm_uptime) : 0,
+        restarts: p.pm2_env ? p.pm2_env.restart_time : 0
+      }));
+      db.upsertPm2Apps(serverId, pm2Apps);
+    } catch { /* ignore parse error */ }
+  } else {
+    // No PM2 data in this tick — read from DB cache to maintain consistency
+    pm2Apps = db.getPm2Apps(serverId);
+  }
+
+  // Parse PM2 logs (with deduplication)
+  if (sections.PM2LOGS) {
+    const parsedLogs = parsePm2Logs(sections.PM2LOGS);
+    for (const [appName, lines] of Object.entries(parsedLogs)) {
+      const key = `${serverId}:${appName}`;
+      const lastSeen = lastLogLines.get(key);
+
+      // Find where new lines start (after the last seen line)
+      let startIdx = 0;
+      if (lastSeen) {
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (lines[i].message === lastSeen) {
+            startIdx = i + 1;
+            break;
+          }
+        }
+      }
+
+      const newLines = lines.slice(startIdx);
+      if (newLines.length > 0) {
+        // Remember last line for next dedup
+        lastLogLines.set(key, lines[lines.length - 1].message);
+
+        db.insertLogs(serverId, appName, newLines);
+        if (browserIo) {
+          for (const line of newLines) {
+            browserIo.emit('server:log', {
+              serverId, appName,
+              logType: line.log_type, message: line.message
+            });
+          }
+        }
+      } else if (lines.length > 0) {
+        // No new lines, but update last seen
+        lastLogLines.set(key, lines[lines.length - 1].message);
+      }
+    }
+  }
+
+  // Save to DB
+  db.updateServerStatus(serverId, 'online');
+  db.insertMetrics(serverId, metrics);
+
+  // Notify browser
+  if (browserIo) {
+    browserIo.emit('server:update', { serverId, metrics, pm2: pm2Apps });
+    browserIo.emit('server:status', { serverId, status: 'online', lastSeen: Math.floor(Date.now() / 1000) });
+  }
+
+  const conn = connections.get(serverId);
+  if (conn) conn.failCount = 0;
+}
+
+function handleStreamEnd(server, err) {
+  if (err) {
+    console.error(`[SSH] Stream error for ${server.name}: ${err.message}`);
+  } else {
+    console.log(`[SSH] Stream ended for ${server.name}`);
+  }
+
+  if (!activeStreams.has(server.id)) return; // intentionally stopped
+
+  // Cleanup connection
+  const conn = connections.get(server.id);
+  const failCount = conn ? conn.failCount + 1 : 1;
+  if (conn && conn.ssh) {
+    try { conn.ssh.dispose(); } catch {}
+  }
+  connections.delete(server.id);
+
+  if (failCount >= 3) {
+    console.log(`[SSH] ${server.name} marked offline after 3 failures. Retry in 5 min.`);
+    db.updateServerStatus(server.id, 'offline');
+    if (browserIo) {
+      browserIo.emit('server:status', { serverId: server.id, status: 'offline', lastSeen: server.last_seen });
+    }
+    activeStreams.delete(server.id);
+    setTimeout(() => startPolling(server), 300000);
+  } else {
+    console.log(`[SSH] Reconnecting ${server.name} (attempt ${failCount}/3)...`);
+    // Store fail count for next attempt
+    connections.set(server.id, { ssh: null, failCount });
+    setTimeout(() => startStream(server), 5000);
+  }
+}
+
+/* ─── Parsers ─── */
+
+function parseSysOutput(serverId, output) {
+  const metrics = { cpu_percent: 0, cpu_cores: [], cpu_temp: null, ram_total: 0, ram_used: 0, igpu_percent: null, igpu_mem_used: null, dgpu_percent: null, dgpu_mem_used: null, dgpu_mem_total: null };
+
+  const sections = output.split('===MEMINFO===');
+  const statSection = sections[0] || '';
+  const rest = (sections[1] || '').split('===TEMP===');
+  const meminfoSection = rest[0] || '';
+  const tempSection = rest[1] || '';
+
+  // Parse /proc/stat for per-core CPU
+  const prev = prevCpuData.get(serverId) || {};
+  const curr = {};
+
+  for (const line of statSection.split('\n')) {
+    if (!line.startsWith('cpu')) continue;
+    const parts = line.trim().split(/\s+/);
+    const key = parts[0];
+    const values = parts.slice(1).map(Number);
+    const idle = values[3] + (values[4] || 0);
+    const total = values.reduce((a, b) => a + b, 0);
+    curr[key] = { idle, total };
+
+    if (prev[key]) {
+      const idleDiff = idle - prev[key].idle;
+      const totalDiff = total - prev[key].total;
+      const percent = totalDiff > 0 ? Math.round((1 - idleDiff / totalDiff) * 1000) / 10 : 0;
+
+      if (key === 'cpu') {
+        metrics.cpu_percent = percent;
+      } else {
+        metrics.cpu_cores.push({ core: parseInt(key.replace('cpu', '')), percent });
+      }
+    }
+  }
+
+  prevCpuData.set(serverId, curr);
+
+  // Parse /proc/meminfo
+  for (const line of meminfoSection.split('\n')) {
+    if (line.startsWith('MemTotal:')) metrics.ram_total = parseInt(line.split(/\s+/)[1]) * 1024;
+    if (line.startsWith('MemAvailable:')) {
+      const available = parseInt(line.split(/\s+/)[1]) * 1024;
+      metrics.ram_used = metrics.ram_total - available;
+    }
+  }
+
+  // Parse thermal zones — look for CPU temp
+  for (const line of tempSection.split('\n')) {
+    const match = line.match(/^(.+):(\d+)$/);
+    if (!match) continue;
+    const type = match[1];
+    const temp = parseInt(match[2]);
+    if (type.includes('x86_pkg') || type.includes('coretemp') || type === 'cpu' || type.includes('cpu')) {
+      metrics.cpu_temp = Math.round(temp / 100) / 10;
+      break;
+    }
+  }
+  if (metrics.cpu_temp == null) {
+    const firstLine = tempSection.split('\n').find(l => l.match(/^.+:\d+$/));
+    if (firstLine) {
+      metrics.cpu_temp = Math.round(parseInt(firstLine.split(':')[1]) / 100) / 10;
+    }
+  }
+
+  return metrics;
+}
+
+function parseIntelGpuOutput(output) {
+  // Try JSON format first (intel_gpu_top -J on newer versions)
+  try {
+    let parsed = JSON.parse(output);
+    const sample = Array.isArray(parsed) ? parsed[parsed.length - 1] : parsed;
+    const engines = sample.engines || {};
+
+    let igpu_percent = 0;
+    if (engines['Render/3D'] !== undefined) {
+      igpu_percent = typeof engines['Render/3D'] === 'object'
+        ? (engines['Render/3D'].busy ?? 0)
+        : engines['Render/3D'];
+    } else {
+      let totalBusy = 0, count = 0;
+      for (const engine of Object.values(engines)) {
+        const busy = typeof engine === 'object' ? engine.busy : engine;
+        if (busy !== undefined) { totalBusy += busy; count++; }
+      }
+      igpu_percent = count > 0 ? totalBusy / count : 0;
+    }
+    return { igpu_percent, igpu_mem_used: 0 };
+  } catch { /* not JSON, try text format */ }
+
+  // Parse text table format (older intel-gpu-tools)
+  try {
+    const lines = output.split('\n');
+    // Collect data lines (start with digit after optional whitespace)
+    const dataLines = lines.filter(l => /^\s*\d/.test(l));
+    // Prefer lines where freq_act > 0 (skip the idle first sample where req=0 act=0)
+    // Layout: req(0) act(1) irq/s(2) rc6%(3) gpu_w(4) pkg_w(5) RCS%(6) ...
+    const activeLine = dataLines.find(l => {
+      const parts = l.trim().split(/\s+/);
+      return parts.length >= 7 && parseFloat(parts[1]) > 0; // act > 0
+    }) || dataLines[dataLines.length - 1]; // fallback to last line
+
+    if (activeLine) {
+      const parts = activeLine.trim().split(/\s+/);
+      if (parts.length >= 7) {
+        const rcsPercent = parseFloat(parts[6]);
+        if (!isNaN(rcsPercent) && rcsPercent >= 0 && rcsPercent <= 100) {
+          return { igpu_percent: rcsPercent, igpu_mem_used: 0 };
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  return null;
+}
+
+// Parse nvidia-smi CSV output: "utilization.gpu, memory.used, memory.total"
+// Each line = one GPU; we take the first one
+function parseNvidiaGpuOutput(output) {
+  try {
+    const line = output.split('\n').find(l => l.trim().length > 0);
+    if (!line) return null;
+    const parts = line.split(',').map(s => s.trim());
+    if (parts.length < 3) return null;
+    const percent = parseFloat(parts[0]);
+    const memUsed = parseFloat(parts[1]); // MiB
+    const memTotal = parseFloat(parts[2]); // MiB
+    if (isNaN(percent)) return null;
+    return {
+      dgpu_percent: percent,
+      dgpu_mem_used: Math.round(memUsed * 1048576), // MiB -> bytes
+      dgpu_mem_total: Math.round(memTotal * 1048576)
+    };
+  } catch { return null; }
+}
+
+// Parse GPU names from ===GPUNAMES=== section
+function parseGpuNames(output) {
+  const names = { igpu: '', dgpu: '' };
+  for (const line of output.split('\n')) {
+    if (line.startsWith('igpu:')) {
+      names.igpu = line.substring(5).trim();
+    } else if (line.startsWith('dgpu:')) {
+      names.dgpu = line.substring(5).trim();
+    }
+  }
+  return names;
+}
+
+function parsePm2Logs(output) {
+  const logs = {};
+  let currentApp = null;
+  let currentType = 'out';
+
+  for (const line of output.split('\n')) {
+    const headerMatch = line.match(/^==> .+\/(.+)-(out|error)\.log <==$/);
+    if (headerMatch) {
+      currentApp = headerMatch[1];
+      currentType = headerMatch[2] === 'error' ? 'err' : 'out';
+      if (!logs[currentApp]) logs[currentApp] = [];
+      continue;
+    }
+    if (!currentApp || !line.trim()) continue;
+    logs[currentApp].push({ log_type: currentType, message: line });
+  }
+  return logs;
+}
+
+function startAllPolling() {
+  const servers = db.getServers();
+  for (const server of servers) {
+    if (server.mode === 'ssh') {
+      startPolling(server);
+    }
+  }
+}
+
+async function testConnection(server) {
+  const ssh = new NodeSSH();
+  const config = {
+    host: server.ip,
+    username: server.ssh_user || 'root',
+    readyTimeout: 10000,
+  };
+
+  if (server.ssh_key_path) {
+    config.privateKeyPath = server.ssh_key_path;
+  } else if (server.ssh_password) {
+    config.password = server.ssh_password;
+  }
+
+  try {
+    await ssh.connect(config);
+    ssh.dispose();
+    return { success: true };
+  } catch (err) {
+    const msg = err.message || '';
+    let error = 'Connection failed';
+    if (msg.includes('Authentication') || msg.includes('authentication') || msg.includes('Permission denied')) {
+      error = 'Authentication failed';
+    } else if (msg.includes('ECONNREFUSED') || msg.includes('Connection refused')) {
+      error = 'Connection refused';
+    } else if (msg.includes('ETIMEDOUT') || msg.includes('timed out') || msg.includes('Timed out')) {
+      error = 'Connection timed out';
+    } else if (msg.includes('EHOSTUNREACH') || msg.includes('ENETUNREACH') || msg.includes('unreachable')) {
+      error = 'Host unreachable';
+    } else if (msg.includes('ENOTFOUND')) {
+      error = 'Host not found';
+    }
+    return { success: false, error };
+  }
+}
+
+module.exports = { init, startPolling, stopPolling, startAllPolling, testConnection, parseSysOutput, parsePm2Logs, buildStreamScript };

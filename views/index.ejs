@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Server Monitor</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="dashboard">
+  <header>
+    <h1>Server Monitor</h1>
+    <div class="header-actions">
+      <button id="btn-test-socket" class="btn btn-test-socket">Test Socket</button>
+      <button id="btn-pull-all" class="btn btn-secondary">Pull All Servers</button>
+      <button id="btn-add-server" class="btn btn-primary">+ Add Server</button>
+    </div>
+  </header>
+
+  <div id="server-grid" class="server-grid"></div>
+
+  <div id="server-detail" class="server-detail hidden">
+    <div class="detail-header">
+      <h2 id="detail-server-name"></h2>
+      <span id="detail-server-status" class="status-badge"></span>
+      <button id="btn-ssh" class="btn btn-sm btn-ssh hidden">SSH</button>
+      <button id="btn-pull-code" class="btn btn-sm btn-pull hidden">Pull Code</button>
+      <button id="btn-close-detail" class="btn btn-sm">Close</button>
+      <button id="btn-edit-server" class="btn btn-sm">Edit</button>
+      <button id="btn-delete-server" class="btn btn-sm btn-danger">Delete</button>
+    </div>
+
+    <div class="cpu-cores-section" id="cpu-cores-section">
+      <div class="cpu-cores-header">
+        <h3>CPU Cores</h3>
+        <div class="cpu-header-right">
+          <span id="cpu-overall" class="cpu-overall"></span>
+          <span id="cpu-temp" class="cpu-temp"></span>
+        </div>
+      </div>
+      <div id="cpu-cores-grid" class="cpu-cores-grid"></div>
+    </div>
+
+    <div class="time-filter-container">
+      <button class="time-filter-btn active" data-range="all">All</button>
+      <button class="time-filter-btn" data-range="1h">1h</button>
+      <button class="time-filter-btn" data-range="30m">30m</button>
+      <button class="time-filter-btn" data-range="10m">10m</button>
+      <button class="time-filter-btn" data-range="5m">5m</button>
+    </div>
+
+    <div class="charts-container">
+      <div class="chart-box">
+        <h3>CPU %</h3>
+        <canvas id="chart-cpu"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>RAM</h3>
+        <canvas id="chart-ram"></canvas>
+      </div>
+      <div id="gpu-charts-container"></div>
+    </div>
+
+    <div class="pm2-section">
+      <h3>PM2 Processes</h3>
+      <table class="pm2-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>CPU</th>
+            <th>Memory</th>
+            <th>Uptime</th>
+            <th>Restarts</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pm2-tbody"></tbody>
+      </table>
+    </div>
+
+    <div id="log-viewer" class="log-viewer hidden">
+      <div class="log-header">
+        <h3>Logs: <span id="log-app-name"></span></h3>
+        <button id="btn-close-logs" class="btn btn-sm">Close</button>
+      </div>
+      <div id="log-content" class="log-content"></div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Server Modal -->
+  <div id="modal-add-server" class="modal hidden">
+    <div class="modal-content">
+      <h2 id="modal-title">Add Server</h2>
+      <form id="form-server">
+        <input type="hidden" id="form-server-id">
+        <label>Name</label>
+        <input type="text" id="form-name" required placeholder="e.g. server-a">
+        <label>IP Address</label>
+        <input type="text" id="form-ip" required placeholder="e.g. 192.168.1.10 or 100.x.x.x">
+        <label>Mode</label>
+        <select id="form-mode">
+          <option value="agent">Agent</option>
+          <option value="ssh">SSH</option>
+        </select>
+        <div id="ssh-fields" class="hidden">
+          <label>SSH User</label>
+          <input type="text" id="form-ssh-user" placeholder="root">
+          <label>SSH Key Path</label>
+          <input type="text" id="form-ssh-key" placeholder="/path/to/key">
+          <label>SSH Password</label>
+          <input type="password" id="form-ssh-password" placeholder="(optional)">
+        </div>
+        <label>Git Repository Path</label>
+        <input type="text" id="form-git-repo" placeholder="/path/to/repository">
+        <small class="help-text">Absolute path to git repository on server (optional)</small>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="button" id="btn-cancel-modal" class="btn">Cancel</button>
+        </div>
+        <div id="form-connection-status"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Pull Log Viewer Modal -->
+  <div id="modal-pull-logs" class="modal hidden">
+    <div class="modal-content modal-large">
+      <div class="log-header">
+        <h2>Git Pull Logs</h2>
+        <span id="pull-log-server-name"></span>
+        <button id="btn-close-pull-logs" class="btn btn-sm">Close</button>
+      </div>
+      <div id="pull-conflict-warning" class="conflict-warning hidden">
+        <strong>⚠️ Merge Conflict Detected</strong>
+        <p>The git pull encountered merge conflicts. Please resolve them manually via SSH.</p>
+      </div>
+      <div id="pull-log-content" class="log-content"></div>
+      <div id="pull-log-status" class="pull-status hidden"></div>
+    </div>
+  </div>
+
+  <!-- SSH Terminal Modal -->
+  <div id="modal-ssh" class="modal hidden">
+    <div class="modal-content modal-terminal">
+      <div class="log-header">
+        <h2>SSH: <span id="ssh-server-name"></span></h2>
+        <button id="btn-close-ssh" class="btn btn-sm">Close</button>
+      </div>
+      <div id="ssh-terminal" class="ssh-terminal-container"></div>
+    </div>
+  </div>
+
+  <!-- PM2 Log Viewer Modal -->
+  <div id="modal-pm2-logs" class="modal hidden">
+    <div class="modal-content modal-large">
+      <div class="log-header">
+        <h2>PM2 Logs: <span id="log-modal-app-name"></span></h2>
+        <button id="btn-close-pm2-logs" class="btn btn-sm">Close</button>
+      </div>
+      <div id="log-modal-content" class="log-content"></div>
+    </div>
+  </div>
+
+  <!-- Test Socket Modal -->
+  <div id="modal-test-socket" class="modal hidden">
+    <div class="modal-content modal-large">
+      <div class="log-header">
+        <h2>Test Socket Mission</h2>
+        <div>
+          <button id="btn-stop-test-socket" class="btn btn-sm btn-danger hidden">Stop</button>
+          <button id="btn-close-test-socket" class="btn btn-sm">Close</button>
+        </div>
+      </div>
+      <div id="test-socket-content" class="log-content"></div>
+      <div id="test-socket-status" class="pull-status hidden"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0/lib/addon-fit.min.js"></script>
+<script src="/js/charts.js"></script>
+<script src="/js/logs.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

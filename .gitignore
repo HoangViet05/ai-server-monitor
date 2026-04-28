@@ -1,2 +1,8 @@
 node_modules/
-data/*.db
+data/
+tests/*.db
+tests/*.db-shm
+tests/*.db-wal
+*.log
+.env
+.DS_Store

@@ -1,0 +1,9 @@
+{
+  "name": "server-monitor-agent",
+  "version": "1.0.0",
+  "description": "Lightweight monitoring agent",
+  "main": "agent.js",
+  "dependencies": {
+    "socket.io-client": "^4.7.5"
+  }
+}

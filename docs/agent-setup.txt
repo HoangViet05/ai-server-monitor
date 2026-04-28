@@ -1,0 +1,65 @@
+=== Server Monitor Agent — Installation Guide ===
+
+Prerequisites:
+- Node.js 18+ installed
+- PM2 installed globally (npm install -g pm2)
+- Network connectivity to dashboard (Tailscale, LAN, or public IP)
+
+Steps:
+
+1. Copy the agent folder to the server:
+   scp -r agent/ user@100.x.x.x:~/monitor-agent/
+
+2. SSH into the server:
+   ssh user@100.x.x.x
+
+3. Install dependencies:
+   cd ~/monitor-agent
+   npm install
+
+4. Edit the config file:
+   nano agent-config.json
+
+   Change these values:
+   - "dashboard_url": "http://YOUR_DASHBOARD_IP:3000"
+     (Replace with the IP of the machine running the dashboard — Tailscale, LAN, or public IP)
+   - "custom_ip": ""
+     (Optional: set a specific IP for this agent to register with. Leave empty to auto-detect.)
+   - "server_name": "my-server-name"
+     (Give this server a recognizable name)
+   - "interval": 10000
+     (Heartbeat interval in ms. Default 10s is fine.)
+
+5. Start the agent with PM2:
+   pm2 start agent.js --name monitor-agent
+
+6. Save PM2 process list (auto-start on boot):
+   pm2 save
+   pm2 startup
+   (Follow the instructions pm2 prints to enable startup script)
+
+7. Verify it's running:
+   pm2 status
+   pm2 logs monitor-agent
+
+The agent will:
+- Auto-connect to the dashboard
+- Send CPU, RAM, iGPU metrics every 10s
+- Send PM2 process list
+- Auto-reconnect if dashboard restarts
+
+Troubleshooting:
+- "Connection error": Check network connectivity, dashboard IP is correct
+- "pm2 jlist" fails: Make sure PM2 is installed globally
+- No iGPU data: Install intel-gpu-tools (sudo apt install intel-gpu-tools)
+  Note: intel_gpu_top requires root. Run agent with sudo or add user to video group.
+
+To update the agent:
+   pm2 stop monitor-agent
+   (copy new agent.js)
+   pm2 restart monitor-agent
+
+To uninstall:
+   pm2 delete monitor-agent
+   pm2 save
+   rm -rf ~/monitor-agent

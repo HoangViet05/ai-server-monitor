@@ -1,7 +1,7 @@
 {
   "name": "server-monitor",
   "version": "1.0.0",
-  "description": "Server monitoring dashboard via Tailscale",
+  "description": "Server monitoring dashboard",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

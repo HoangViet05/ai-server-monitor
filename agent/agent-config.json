@@ -1,0 +1,6 @@
+{
+  "dashboard_url": "http://DASHBOARD_IP:3000",
+  "interval": 10000,
+  "server_name": "my-server",
+  "custom_ip": ""
+}

@@ -145,3 +145,71 @@ describe('cleanup', () => {
     assert.ok(after.length < before.length);
   });
 });
+
+
+describe('git_pulls', () => {
+  let testServerId;
+
+  before(() => {
+    const server = db.addServer({ 
+      name: 'git-test-server', 
+      ip: '100.64.0.10', 
+      mode: 'agent',
+      git_repo_path: '/test/repo'
+    });
+    testServerId = server.id;
+  });
+
+  it('should create a git pull record', () => {
+    const pull = db.createGitPull(testServerId);
+    assert.ok(pull.id);
+    assert.strictEqual(pull.server_id, testServerId);
+    assert.strictEqual(pull.status, 'running');
+    assert.ok(pull.started_at > 0);
+    assert.strictEqual(pull.completed_at, null);
+  });
+
+  it('should update a git pull record', () => {
+    const pull = db.createGitPull(testServerId);
+    const updated = db.updateGitPull(pull.id, {
+      status: 'success',
+      output: 'Already up to date.',
+      completed_at: Math.floor(Date.now() / 1000)
+    });
+    assert.strictEqual(updated.status, 'success');
+    assert.strictEqual(updated.output, 'Already up to date.');
+    assert.ok(updated.completed_at > 0);
+  });
+
+  it('should get git pulls for a server', () => {
+    const pulls = db.getGitPulls(testServerId, 10);
+    assert.ok(pulls.length >= 2);
+    assert.strictEqual(pulls[0].server_id, testServerId);
+  });
+
+  it('should get a specific git pull', () => {
+    const pulls = db.getGitPulls(testServerId, 1);
+    const pull = db.getGitPull(pulls[0].id);
+    assert.ok(pull);
+    assert.strictEqual(pull.id, pulls[0].id);
+  });
+
+  it('should handle git_repo_path in server operations', () => {
+    const server = db.getServer(testServerId);
+    assert.strictEqual(server.git_repo_path, '/test/repo');
+
+    const updated = db.updateServer(testServerId, { git_repo_path: '/new/path' });
+    assert.strictEqual(updated.git_repo_path, '/new/path');
+  });
+
+  it('should validate absolute path requirement', () => {
+    // This is a frontend validation, but we can test the data model accepts it
+    const server = db.addServer({
+      name: 'path-test',
+      ip: '100.64.0.11',
+      mode: 'agent',
+      git_repo_path: '/absolute/path'
+    });
+    assert.strictEqual(server.git_repo_path, '/absolute/path');
+  });
+});
