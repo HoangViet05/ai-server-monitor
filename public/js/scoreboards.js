@@ -22,7 +22,7 @@
           <span class="status-dot ${sb.running ? 'online' : 'offline'}"></span>
         </div>
         <div class="card-meta">
-          <div><span class="meta-label">Script:</span> <span class="meta-value">${escapeHtml(sb.script_type)}</span></div>
+          <div><span class="meta-label">Script:</span> <span class="script-badge script-${escapeHtml(sb.script_type)}">${escapeHtml(sb.script_type)}</span></div>
           <div><span class="meta-label">Scoreboard ID:</span></div>
           <div class="meta-mono">${escapeHtml(sb.scoreboard_id)}</div>
         </div>
