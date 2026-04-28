@@ -892,6 +892,14 @@ const App = (() => {
     document.getElementById('btn-edit-server').addEventListener('click', () => openEditModal(selectedServerId));
     document.getElementById('btn-delete-server').addEventListener('click', handleDelete);
     document.getElementById('btn-close-pm2-logs').addEventListener('click', () => App.LogModal.close());
+    document.getElementById('btn-fullscreen-pm2-logs').addEventListener('click', () => {
+      const content = document.querySelector('#modal-pm2-logs .modal-content');
+      const btn = document.getElementById('btn-fullscreen-pm2-logs');
+      const isFs = content.classList.toggle('modal-fullscreen');
+      btn.textContent = isFs ? '⛶ Exit fullscreen' : '⛶ Fullscreen';
+      const logContent = document.getElementById('log-modal-content');
+      logContent.scrollTop = logContent.scrollHeight;
+    });
     document.getElementById('btn-ssh').addEventListener('click', handleOpenSSH);
     document.getElementById('btn-close-ssh').addEventListener('click', handleCloseSSH);
     document.getElementById('btn-test-socket').addEventListener('click', handleTestSocket);
@@ -1383,7 +1391,7 @@ const App = (() => {
       logContent.innerHTML = '<div class="log-line-out">Loading...</div>';
 
       // Fetch historical logs
-      fetch(`/api/servers/${serverId}/logs/${appName}?lines=200`)
+      fetch(`/api/servers/${serverId}/logs/${appName}?lines=2000`)
         .then(r => r.json())
         .then(logs => {
           logContent.innerHTML = '';
@@ -1403,6 +1411,10 @@ const App = (() => {
       isOpen = false;
       document.getElementById('modal-pm2-logs').classList.add('hidden');
       document.getElementById('log-modal-content').innerHTML = '';
+      const content = document.querySelector('#modal-pm2-logs .modal-content');
+      content.classList.remove('modal-fullscreen');
+      const fsBtn = document.getElementById('btn-fullscreen-pm2-logs');
+      if (fsBtn) fsBtn.textContent = '⛶ Fullscreen';
     }
 
     let lineCounter = 0;

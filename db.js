@@ -147,7 +147,7 @@ function prepareStatements() {
   stmts.cleanupExcessLogs = db.prepare(`
     DELETE FROM pm2_logs WHERE id IN (
       SELECT id FROM pm2_logs WHERE server_id = ? AND app_name = ?
-      ORDER BY id DESC LIMIT -1 OFFSET 500
+      ORDER BY id DESC LIMIT -1 OFFSET 2000
     )
   `);
 
