@@ -20,13 +20,13 @@ function isRunning(id) {
 }
 
 function emitLog(scoreboardId, stream, message) {
-  const lines = message.split(/\r?\n/);
+  const lines = message.split(/\r?\n/).filter(l => l.length > 0);
+  if (lines.length === 0) return;
   for (const line of lines) {
-    if (line.length === 0) continue;
     db.insertScoreboardLog(scoreboardId, stream, line);
-    if (browserIo) {
-      browserIo.emit('scoreboard:log', { scoreboardId, stream, message: line });
-    }
+  }
+  if (browserIo) {
+    browserIo.emit('scoreboard:log', { scoreboardId, stream, lines });
   }
 }
 

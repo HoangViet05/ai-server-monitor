@@ -134,23 +134,35 @@
     document.getElementById('btn-fullscreen-sb-logs').textContent = '⛶ Fullscreen';
   }
 
-  function appendLogLine(stream, message) {
-    const content = document.getElementById('sb-log-content');
+  function buildLogEntry(stream, message) {
     const entry = document.createElement('div');
     entry.className = 'log-entry log-type-' + (stream === 'stderr' ? 'err' : (stream === 'system' ? 'system' : 'out'));
     const text = document.createElement('span');
     text.className = 'log-line-text';
     text.textContent = message;
     entry.appendChild(text);
-    content.appendChild(entry);
+    return entry;
+  }
+
+  function appendLogLine(stream, message) {
+    document.getElementById('sb-log-content').appendChild(buildLogEntry(stream, message));
+  }
+
+  function appendLogLines(stream, lines) {
+    const content = document.getElementById('sb-log-content');
+    const frag = document.createDocumentFragment();
+    for (const m of lines) frag.appendChild(buildLogEntry(stream, m));
+    content.appendChild(frag);
   }
 
   function bindSocket() {
-    socket.on('scoreboard:log', ({ scoreboardId, stream, message }) => {
+    socket.on('scoreboard:log', ({ scoreboardId, stream, lines, message }) => {
       if (scoreboardId !== activeLogId) return;
       const content = document.getElementById('sb-log-content');
       const wasAtBottom = content.scrollHeight - content.scrollTop - content.clientHeight < 50;
-      appendLogLine(stream, message);
+      const arr = Array.isArray(lines) ? lines : (message != null ? [message] : []);
+      if (arr.length === 0) return;
+      appendLogLines(stream, arr);
       if (wasAtBottom) content.scrollTop = content.scrollHeight;
     });
 
