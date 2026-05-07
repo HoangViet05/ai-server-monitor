@@ -162,6 +162,50 @@ async function startStream(server) {
 
     if (!ssh.connection) throw new Error('SSH connection not available');
 
+    // Eager PM2 fetch: Execute pm2 jlist immediately after connection
+    // This populates the database cache before the first tick arrives
+    // Fixes bug where PM2 count shows 0 on initial page load
+    try {
+      console.log(`[SSH] Fetching PM2 data for ${server.name} on connection...`);
+      const pm2Result = await ssh.execCommand('pm2 jlist 2>/dev/null');
+      
+      if (pm2Result.stdout && pm2Result.stdout.trim()) {
+        try {
+          const raw = JSON.parse(pm2Result.stdout);
+          const pm2Apps = raw.map(p => ({
+            pm_id: p.pm_id,
+            name: p.name,
+            status: p.pm2_env ? p.pm2_env.status : 'unknown',
+            cpu: p.monit ? p.monit.cpu : 0,
+            memory: p.monit ? p.monit.memory : 0,
+            uptime: p.pm2_env ? (Date.now() - p.pm2_env.pm_uptime) : 0,
+            restarts: p.pm2_env ? p.pm2_env.restart_time : 0
+          }));
+          
+          // Populate database cache immediately
+          db.upsertPm2Apps(server.id, pm2Apps);
+          console.log(`[SSH] PM2 cache populated for ${server.name}: ${pm2Apps.length} apps`);
+          
+          // Emit initial server:update event with PM2 data
+          // This ensures frontend receives PM2 data immediately
+          if (browserIo) {
+            browserIo.emit('server:update', { 
+              serverId: server.id, 
+              metrics: {}, 
+              pm2: pm2Apps 
+            });
+          }
+        } catch (parseErr) {
+          console.warn(`[SSH] Failed to parse PM2 data for ${server.name}:`, parseErr.message);
+        }
+      } else {
+        console.log(`[SSH] No PM2 data for ${server.name} (PM2 not installed or no processes)`);
+      }
+    } catch (pm2Err) {
+      // PM2 not installed or command failed - gracefully continue
+      console.warn(`[SSH] PM2 fetch failed for ${server.name}:`, pm2Err.message);
+    }
+
     const script = buildStreamScript();
 
     // Use raw ssh2 exec for streaming (avoids node-ssh memory accumulation)
