@@ -134,7 +134,9 @@ function buildStreamScript() {
     '    C=$((C+1))',
     '    if [ $((C % 3)) -eq 0 ]; then',
     '      echo "===PM2==="',
-    '      pm2 jlist 2>/dev/null',
+    // Resolve pm2 binary: check common locations for nvm/npm global installs
+    '      PM2_BIN=$(command -v pm2 2>/dev/null || ls $HOME/.nvm/versions/node/*/bin/pm2 2>/dev/null | tail -1 || ls /usr/local/bin/pm2 /usr/bin/pm2 2>/dev/null | head -1)',
+    '      if [ -n "$PM2_BIN" ]; then "$PM2_BIN" jlist 2>/dev/null; fi',
     '    fi',
     // PM2 logs -- every 5th tick (10s)
     '    if [ $((C % 5)) -eq 0 ]; then',
@@ -167,11 +169,24 @@ async function startStream(server) {
     // Fixes bug where PM2 count shows 0 on initial page load
     try {
       console.log(`[SSH] Fetching PM2 data for ${server.name} on connection...`);
-      const pm2Result = await ssh.execCommand('pm2 jlist 2>/dev/null');
+      // Use same shell invocation as the streaming script to ensure pm2 is in PATH
+      // Resolve pm2 binary across common install locations (nvm, npm global, system)
+      const pm2Result = await ssh.execCommand(
+        'PM2_BIN=$(command -v pm2 2>/dev/null || ls $HOME/.nvm/versions/node/*/bin/pm2 2>/dev/null | tail -1 || ls /usr/local/bin/pm2 /usr/bin/pm2 2>/dev/null | head -1); ' +
+        'if [ -n "$PM2_BIN" ]; then "$PM2_BIN" jlist 2>/dev/null; fi'
+      );
+      
+      console.log(`[SSH] PM2 fetch stdout length: ${pm2Result.stdout?.length || 0}, stderr: ${pm2Result.stderr?.substring(0, 100) || ''}`);
       
       if (pm2Result.stdout && pm2Result.stdout.trim()) {
+        // pm2 jlist may output debug lines before the JSON array
+        // Find the JSON array by looking for the first '[' character
+        const stdout = pm2Result.stdout.trim();
+        const jsonStart = stdout.indexOf('[');
+        const jsonStr = jsonStart >= 0 ? stdout.substring(jsonStart) : stdout;
+        
         try {
-          const raw = JSON.parse(pm2Result.stdout);
+          const raw = JSON.parse(jsonStr);
           const pm2Apps = raw.map(p => ({
             pm_id: p.pm_id,
             name: p.name,
@@ -196,7 +211,8 @@ async function startStream(server) {
             });
           }
         } catch (parseErr) {
-          console.warn(`[SSH] Failed to parse PM2 data for ${server.name}:`, parseErr.message);
+          console.warn(`[SSH] Failed to parse PM2 data for ${server.name}: ${parseErr.message}`);
+          console.warn(`[SSH] Raw stdout (first 200 chars): ${pm2Result.stdout.substring(0, 200)}`);
         }
       } else {
         console.log(`[SSH] No PM2 data for ${server.name} (PM2 not installed or no processes)`);
@@ -322,7 +338,7 @@ function processTick(serverId, tickData) {
   }
 
   // Parse PM2 processes
-  let pm2Apps = [];
+  let pm2Apps = null; // null means "no data available yet"
   if (sections.PM2) {
     try {
       const raw = JSON.parse(sections.PM2);
@@ -339,7 +355,12 @@ function processTick(serverId, tickData) {
     } catch { /* ignore parse error */ }
   } else {
     // No PM2 data in this tick — read from DB cache to maintain consistency
-    pm2Apps = db.getPm2Apps(serverId);
+    const cached = db.getPm2Apps(serverId);
+    // Only include cached data if cache is populated (avoid sending empty array
+    // when cache hasn't been populated yet, which would show "0" on frontend)
+    if (cached.length > 0) {
+      pm2Apps = cached;
+    }
   }
 
   // Parse PM2 logs (with deduplication)

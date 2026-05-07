@@ -750,7 +750,9 @@ const App = (() => {
       // Update card
       updateCardMetrics(serverId, metrics);
       const pm2El = document.getElementById(`card-pm2-${serverId}`);
-      if (pm2El && pm2) pm2El.textContent = pm2.length;
+      // Only update PM2 count when we have actual data (not null/undefined)
+      // null means cache is empty - don't overwrite a valid count with 0
+      if (pm2El && pm2 != null) pm2El.textContent = pm2.length;
 
       // If gpu_names arrived, cache them on the server object and rebuild charts if needed
       if (metrics.gpu_names) {
@@ -788,7 +790,7 @@ const App = (() => {
           renderCores(metrics.cpu_cores);
         }
         updateCpuHeader(metrics.cpu_percent, metrics.cpu_temp);
-        if (pm2) renderPm2Table(serverId, pm2);
+        if (pm2 != null) renderPm2Table(serverId, pm2);
       }
     });
 
