@@ -332,6 +332,14 @@ function prepareStatements() {
   stmts.getIncidentHistory = db.prepare(`
     SELECT * FROM incidents WHERE server_id = ? AND opened_at >= ? ORDER BY opened_at DESC
   `);
+  stmts.cleanupExcessBaselines = db.prepare(`
+    DELETE FROM baselines WHERE id IN (
+      SELECT id FROM baselines
+      WHERE server_id = ? AND active = 0
+      ORDER BY created_at DESC
+      LIMIT -1 OFFSET 3
+    )
+  `);
 }
 
 function close() {
@@ -656,6 +664,13 @@ function cleanupOldIncidents() {
   stmts.cleanupOldIncidents.run(cutoff);
 }
 
+function cleanupExcessBaselines() {
+  const servers = stmts.getServers.all();
+  for (const s of servers) {
+    stmts.cleanupExcessBaselines.run(s.id);
+  }
+}
+
 module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
@@ -669,5 +684,5 @@ module.exports = {
   insertVersionSnapshot, getLatestVersionSnapshot, cleanupOldVersionSnapshots,
   saveBaseline, getActiveBaseline, listBaselines, acceptBaseline,
   upsertIncident, getIncident, getOpenIncidents, ackIncident, closeIncident,
-  getIncidentHistory, cleanupOldIncidents
+  getIncidentHistory, cleanupOldIncidents, cleanupExcessBaselines
 };

@@ -17,6 +17,10 @@ function run() {
     db.cleanupOldMetrics();
     db.cleanupExcessLogs();
     db.cleanupOldGitPulls();
+    db.cleanupOldHealthEvents();
+    db.cleanupOldVersionSnapshots();
+    db.cleanupOldIncidents();
+    db.cleanupExcessBaselines();
     for (const sb of db.getScoreboards()) {
       db.cleanupExcessScoreboardLogs(sb.id);
     }
