@@ -101,7 +101,9 @@ function buildStreamScript() {
     'if command -v intel_gpu_top >/dev/null 2>&1; then',
     '  (while true; do ${TASKSET_CMD:+$TASKSET_CMD} timeout 3 intel_gpu_top -J -s 1800 -l 1 > /tmp/.smon_gpu_$$ 2>/dev/null || sleep 2; done) &',
     '  GPID=$!',
-    '  trap "kill $GPID 2>/dev/null; rm -f /tmp/.smon_gpu_$$ /tmp/.smon_net_$$" EXIT',
+    '  trap "kill $GPID 2>/dev/null; rm -f /tmp/.smon_gpu_$$ /tmp/.smon_net_$$ /tmp/.smon_rapl_$$" EXIT',
+    'else',
+    '  trap "rm -f /tmp/.smon_net_$$ /tmp/.smon_rapl_$$" EXIT',
     'fi',
     '',
     // Main loop function -- run under taskset if available
@@ -125,30 +127,28 @@ function buildStreamScript() {
     '    awk \'NR>2{print $1,$2,$10}\' /proc/net/dev 2>/dev/null | tee /tmp/.smon_net_$$',
     // Power consumption -- CPU via RAPL (powercap), GPU via nvidia-smi
     '    echo "===POWER==="',
-    // CPU RAPL: read energy_uj from package domains, delta with previous snapshot
+    // CPU RAPL: read previous snapshot from file, then write current snapshot
+    // Delta between ticks (~2s) gives accurate watts
     '    RAPL_DIR=/sys/class/powercap',
     '    if [ -d "$RAPL_DIR" ]; then',
-    '      for d in "$RAPL_DIR"/intel-rapl:*; do',
-    '        [ -f "$d/name" ] || continue',
-    '        name=$(cat "$d/name" 2>/dev/null)',
-    '        uj=$(cat "$d/energy_uj" 2>/dev/null)',
-    '        echo "rapl:$name:$uj"',
-    '      done',
+    '      if [ -f /tmp/.smon_rapl_$$ ]; then',
+    '        cat /tmp/.smon_rapl_$$',
+    '      fi',
     '    fi',
     '    echo "---POWER_SNAP---"',
-    // Save current snapshot for next tick delta
     '    if [ -d "$RAPL_DIR" ]; then',
+    '      rm -f /tmp/.smon_rapl_$$',
     '      for d in "$RAPL_DIR"/intel-rapl:*; do',
     '        [ -f "$d/name" ] || continue',
     '        name=$(cat "$d/name" 2>/dev/null)',
     '        uj=$(cat "$d/energy_uj" 2>/dev/null)',
-    '        echo "rapl:$name:$uj"',
+    '        [ -n "$uj" ] && echo "rapl:$name:$uj" | tee -a /tmp/.smon_rapl_$$',
     '      done',
     '    fi',
-    // GPU power via nvidia-smi (watts, direct reading)
+    // GPU power via nvidia-smi -- filter out N/A values
     '    if command -v nvidia-smi >/dev/null 2>&1; then',
-    '      pw=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1)',
-    '      [ -n "$pw" ] && echo "dgpu_power:$pw"',
+    '      pw=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d " ")',
+    '      case "$pw" in [0-9]*) echo "dgpu_power:$pw" ;; esac',
     '    fi',
     // iGPU: read from temp file -- every tick (instant read, no spawn)
     '    echo "===GPU==="',
@@ -717,7 +717,7 @@ function parsePowerOutput(output) {
     const parts = output.split('---POWER_SNAP---');
     const result = {};
 
-    // Parse GPU power (present in any part)
+    // Parse GPU power (can appear anywhere in the section)
     for (const line of output.split('\n')) {
       if (line.startsWith('dgpu_power:')) {
         const w = parseFloat(line.substring(11).trim());
@@ -726,12 +726,13 @@ function parsePowerOutput(output) {
     }
 
     // Calculate CPU watts from RAPL delta (need both snapshots)
-    if (parts.length >= 2) {
+    // parts[0] = previous tick snapshot, parts[1] = current tick snapshot + gpu line
+    if (parts.length >= 2 && parts[0].trim().length > 0) {
       const parseRapl = (text) => {
         const map = {};
         for (const line of text.split('\n')) {
           const m = line.match(/^rapl:([^:]+):(\d+)/);
-          if (m) map[m[1]] = parseInt(m[2]);
+          if (m) map[m[1].trim()] = parseInt(m[2]);
         }
         return map;
       };
@@ -748,11 +749,13 @@ function parsePowerOutput(output) {
         let delta = snap2[name] - snap1[name];
         // Handle counter wrap (max_energy_range_uj ~262144 J)
         if (delta < 0) delta += 262144000000;
-        totalUj += delta;
-        hasData = true;
+        if (delta > 0) {
+          totalUj += delta;
+          hasData = true;
+        }
       }
 
-      if (hasData && totalUj >= 0) {
+      if (hasData) {
         // Delta over ~2s tick interval → watts = microjoules / 2,000,000
         result.cpu_watts = Math.round((totalUj / 2000000) * 10) / 10;
       }
