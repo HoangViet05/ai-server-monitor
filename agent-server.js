@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const db = require('./db');
+const healthService = require('./health-service');
 
 let browserIo = null;
 let agentIo = null;
@@ -66,6 +67,72 @@ function createAgentServer(httpServer, _browserIo) {
       if (browserIo) {
         for (const msg of lines) {
           browserIo.emit('server:log', { serverId, appName, logType, message: msg });
+        }
+      }
+    });
+
+    socket.on('health:check', (data) => {
+      if (!serverId) return;
+      const ev = {
+        kind: data.kind, ok: !!data.ok,
+        payload: data.payload, errors: data.errors,
+        ts: data.ts || Math.floor(Date.now() / 1000)
+      };
+      db.insertHealthEvent(serverId, ev);
+
+      const decisions = healthService.evaluate(serverId, ev);
+      for (const d of decisions) {
+        if (d.action === 'open') {
+          const inc = db.upsertIncident(serverId, {
+            kind: d.kind, severity: d.severity, title: d.title,
+            details: d.details, suggested_actions: d.suggested_actions
+          });
+          if (browserIo) browserIo.emit('health:incident', { serverId, incident: inc, change: 'open' });
+        } else if (d.action === 'close') {
+          const open = db.getOpenIncidents(serverId).find(i => i.kind === d.kind);
+          if (open) {
+            db.closeIncident(open.id);
+            if (browserIo) browserIo.emit('health:incident', { serverId, incident: { ...open, closed_at: Math.floor(Date.now() / 1000) }, change: 'close' });
+          }
+        }
+      }
+      if (browserIo) browserIo.emit('health:update', { serverId, kind: ev.kind, payload: ev.payload, ok: ev.ok, ts: ev.ts });
+    });
+
+    socket.on('version:snapshot', (data) => {
+      if (!serverId) return;
+      const snap = {
+        pip_freeze: data.pip_freeze || {},
+        system_pkgs: data.system_pkgs || {},
+        node_pkgs: data.node_pkgs || {},
+        ts: data.ts || Math.floor(Date.now() / 1000)
+      };
+      db.insertVersionSnapshot(serverId, snap);
+
+      const baseline = db.getActiveBaseline(serverId);
+      if (!baseline) return;
+
+      const baselineSnap = {
+        pip_freeze: JSON.parse(baseline.pip_freeze || '{}'),
+        system_pkgs: JSON.parse(baseline.system_pkgs || '{}'),
+        node_pkgs: JSON.parse(baseline.node_pkgs || '{}')
+      };
+
+      const watchPip = data.watch_pip || [];
+      const drift = healthService.computeVersionDrift(baselineSnap, snap, { watchPip });
+      if (drift) {
+        const inc = db.upsertIncident(serverId, {
+          kind: 'version_drift', severity: drift.severity,
+          title: 'Library versions differ from baseline',
+          details: drift.diff,
+          suggested_actions: [{ label: 'View diff (UI)', command: '# Open Health → Versions tab' }]
+        });
+        if (browserIo) browserIo.emit('health:incident', { serverId, incident: inc, change: 'open' });
+      } else {
+        const open = db.getOpenIncidents(serverId).find(i => i.kind === 'version_drift');
+        if (open) {
+          db.closeIncident(open.id);
+          if (browserIo) browserIo.emit('health:incident', { serverId, incident: { ...open, closed_at: Math.floor(Date.now() / 1000) }, change: 'close' });
         }
       }
     });
