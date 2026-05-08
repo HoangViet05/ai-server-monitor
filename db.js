@@ -270,6 +270,19 @@ function prepareStatements() {
   stmts.getGitPull = db.prepare('SELECT * FROM git_pulls WHERE id = ?');
   stmts.getGitPulls = db.prepare('SELECT * FROM git_pulls WHERE server_id = ? ORDER BY started_at DESC LIMIT ?');
   stmts.cleanupOldGitPulls = db.prepare('DELETE FROM git_pulls WHERE started_at < ?');
+
+  // Health events
+  stmts.insertHealthEvent = db.prepare(`
+    INSERT INTO health_events (server_id, kind, ok, payload, errors, ts)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  stmts.getRecentHealthEventsAll = db.prepare(`
+    SELECT * FROM health_events WHERE server_id = ? AND ts >= ? ORDER BY ts DESC
+  `);
+  stmts.getRecentHealthEventsKind = db.prepare(`
+    SELECT * FROM health_events WHERE server_id = ? AND ts >= ? AND kind = ? ORDER BY ts DESC
+  `);
+  stmts.cleanupOldHealthEvents = db.prepare(`DELETE FROM health_events WHERE ts < ?`);
 }
 
 function close() {
@@ -469,6 +482,24 @@ function cleanupOldGitPulls() {
   stmts.cleanupOldGitPulls.run(cutoff);
 }
 
+// --- Health Events ---
+
+function insertHealthEvent(serverId, ev) {
+  const payload = ev.payload != null ? JSON.stringify(ev.payload) : null;
+  const errors = ev.errors != null ? JSON.stringify(ev.errors) : null;
+  stmts.insertHealthEvent.run(serverId, ev.kind, ev.ok ? 1 : 0, payload, errors, ev.ts);
+}
+
+function getRecentHealthEvents(serverId, sinceTs, kind) {
+  if (kind) return stmts.getRecentHealthEventsKind.all(serverId, sinceTs, kind);
+  return stmts.getRecentHealthEventsAll.all(serverId, sinceTs);
+}
+
+function cleanupOldHealthEvents() {
+  const cutoff = Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
+  stmts.cleanupOldHealthEvents.run(cutoff);
+}
+
 module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
@@ -477,5 +508,6 @@ module.exports = {
   insertLogs, getLogs, cleanupExcessLogs,
   createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls,
   addScoreboard, getScoreboard, getScoreboards, deleteScoreboard,
-  insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs
+  insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs,
+  insertHealthEvent, getRecentHealthEvents, cleanupOldHealthEvents
 };
