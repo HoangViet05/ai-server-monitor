@@ -123,6 +123,33 @@ function buildStreamScript() {
     '    if [ -f /tmp/.smon_net_$$ ]; then cat /tmp/.smon_net_$$; fi',
     '    echo "---NET_SNAP---"',
     '    awk \'NR>2{print $1,$2,$10}\' /proc/net/dev 2>/dev/null | tee /tmp/.smon_net_$$',
+    // Power consumption -- CPU via RAPL (powercap), GPU via nvidia-smi
+    '    echo "===POWER==="',
+    // CPU RAPL: read energy_uj from package domains, delta with previous snapshot
+    '    RAPL_DIR=/sys/class/powercap',
+    '    if [ -d "$RAPL_DIR" ]; then',
+    '      for d in "$RAPL_DIR"/intel-rapl:*; do',
+    '        [ -f "$d/name" ] || continue',
+    '        name=$(cat "$d/name" 2>/dev/null)',
+    '        uj=$(cat "$d/energy_uj" 2>/dev/null)',
+    '        echo "rapl:$name:$uj"',
+    '      done',
+    '    fi',
+    '    echo "---POWER_SNAP---"',
+    // Save current snapshot for next tick delta
+    '    if [ -d "$RAPL_DIR" ]; then',
+    '      for d in "$RAPL_DIR"/intel-rapl:*; do',
+    '        [ -f "$d/name" ] || continue',
+    '        name=$(cat "$d/name" 2>/dev/null)',
+    '        uj=$(cat "$d/energy_uj" 2>/dev/null)',
+    '        echo "rapl:$name:$uj"',
+    '      done',
+    '    fi',
+    // GPU power via nvidia-smi (watts, direct reading)
+    '    if command -v nvidia-smi >/dev/null 2>&1; then',
+    '      pw=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1)',
+    '      [ -n "$pw" ] && echo "dgpu_power:$pw"',
+    '    fi',
     // iGPU: read from temp file -- every tick (instant read, no spawn)
     '    echo "===GPU==="',
     '    cat /tmp/.smon_gpu_$$ 2>/dev/null',
@@ -313,6 +340,15 @@ function processTick(serverId, tickData) {
     if (net) {
       metrics.net_rx_bytes = net.net_rx_bytes;
       metrics.net_tx_bytes = net.net_tx_bytes;
+    }
+  }
+
+  // Parse power consumption (CPU RAPL + GPU)
+  if (sections.POWER) {
+    const power = parsePowerOutput(sections.POWER);
+    if (power) {
+      if (power.cpu_watts != null) metrics.cpu_watts = power.cpu_watts;
+      if (power.dgpu_watts != null) metrics.dgpu_watts = power.dgpu_watts;
     }
   }
 
@@ -662,7 +698,8 @@ function parseNetworkOutput(output) {
 }
 
 // Parse GPU names from ===GPUNAMES=== section
-function parseGpuNames(output) {  const names = { igpu: '', dgpu: '' };
+function parseGpuNames(output) {
+  const names = { igpu: '', dgpu: '' };
   for (const line of output.split('\n')) {
     if (line.startsWith('igpu:')) {
       names.igpu = line.substring(5).trim();
@@ -671,6 +708,58 @@ function parseGpuNames(output) {  const names = { igpu: '', dgpu: '' };
     }
   }
   return names;
+}
+
+// Parse POWER section: CPU RAPL delta (two snapshots separated by ---POWER_SNAP---) + GPU watts
+// RAPL lines: "rapl:<name>:<energy_uj>"  GPU line: "dgpu_power:<watts>"
+function parsePowerOutput(output) {
+  try {
+    const parts = output.split('---POWER_SNAP---');
+    const result = {};
+
+    // Parse GPU power (present in any part)
+    for (const line of output.split('\n')) {
+      if (line.startsWith('dgpu_power:')) {
+        const w = parseFloat(line.substring(11).trim());
+        if (!isNaN(w) && w >= 0) result.dgpu_watts = Math.round(w * 10) / 10;
+      }
+    }
+
+    // Calculate CPU watts from RAPL delta (need both snapshots)
+    if (parts.length >= 2) {
+      const parseRapl = (text) => {
+        const map = {};
+        for (const line of text.split('\n')) {
+          const m = line.match(/^rapl:([^:]+):(\d+)/);
+          if (m) map[m[1]] = parseInt(m[2]);
+        }
+        return map;
+      };
+
+      const snap1 = parseRapl(parts[0]);
+      const snap2 = parseRapl(parts[1]);
+
+      // Sum only top-level package domains to avoid double-counting core/uncore
+      let totalUj = 0;
+      let hasData = false;
+      for (const name of Object.keys(snap2)) {
+        if (!name.startsWith('package')) continue;
+        if (snap1[name] == null) continue;
+        let delta = snap2[name] - snap1[name];
+        // Handle counter wrap (max_energy_range_uj ~262144 J)
+        if (delta < 0) delta += 262144000000;
+        totalUj += delta;
+        hasData = true;
+      }
+
+      if (hasData && totalUj >= 0) {
+        // Delta over ~2s tick interval → watts = microjoules / 2,000,000
+        result.cpu_watts = Math.round((totalUj / 2000000) * 10) / 10;
+      }
+    }
+
+    return (result.cpu_watts != null || result.dgpu_watts != null) ? result : null;
+  } catch { return null; }
 }
 
 function parsePm2Logs(output) {

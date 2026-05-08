@@ -77,6 +77,14 @@ const App = (() => {
             <div class="metric-label">Network</div>
             <div class="metric-value metric-net" id="card-net-${s.id}">--</div>
           </div>
+          <div class="metric" id="card-cpupwr-wrap-${s.id}" style="display:none">
+            <div class="metric-label">CPU Pwr</div>
+            <div class="metric-value" id="card-cpupwr-${s.id}">--</div>
+          </div>
+          <div class="metric" id="card-dgpupwr-wrap-${s.id}" style="display:none">
+            <div class="metric-label">GPU Pwr</div>
+            <div class="metric-value" id="card-dgpupwr-${s.id}">--</div>
+          </div>
         </div>
         <div class="card-footer">
           <span>${s.status === 'offline' ? 'Last seen: ' + lastSeen : 'Mode: ' + s.mode}</span>
@@ -211,6 +219,26 @@ const App = (() => {
         netEl.innerHTML = `<span class="net-rx">↓ ${formatNetSpeed(m.net_rx_bytes)}</span> <span class="net-tx">↑ ${formatNetSpeed(m.net_tx_bytes)}</span>`;
       } else {
         netEl.textContent = '--';
+      }
+    }
+    // CPU Power (RAPL)
+    const cpuPwrEl = document.getElementById(`card-cpupwr-${serverId}`);
+    const cpuPwrWrap = document.getElementById(`card-cpupwr-wrap-${serverId}`);
+    if (cpuPwrEl) {
+      if (m.cpu_watts != null) {
+        cpuPwrEl.textContent = m.cpu_watts.toFixed(1) + ' W';
+        cpuPwrEl.style.color = m.cpu_watts >= 95 ? '#ff1744' : m.cpu_watts >= 65 ? '#ff9100' : '#e0e0e0';
+        if (cpuPwrWrap) cpuPwrWrap.style.display = '';
+      }
+    }
+    // GPU Power (NVIDIA)
+    const dgpuPwrEl = document.getElementById(`card-dgpupwr-${serverId}`);
+    const dgpuPwrWrap = document.getElementById(`card-dgpupwr-wrap-${serverId}`);
+    if (dgpuPwrEl) {
+      if (m.dgpu_watts != null) {
+        dgpuPwrEl.textContent = m.dgpu_watts.toFixed(1) + ' W';
+        dgpuPwrEl.style.color = m.dgpu_watts >= 200 ? '#ff1744' : m.dgpu_watts >= 120 ? '#ff9100' : '#e0e0e0';
+        if (dgpuPwrWrap) dgpuPwrWrap.style.display = '';
       }
     }
     // Update GPU labels with short names from gpu_names
