@@ -304,6 +304,34 @@ function prepareStatements() {
   stmts.getBaseline = db.prepare(`SELECT * FROM baselines WHERE id = ?`);
   stmts.getActiveBaseline = db.prepare(`SELECT * FROM baselines WHERE server_id = ? AND active = 1`);
   stmts.listBaselines = db.prepare(`SELECT * FROM baselines WHERE server_id = ? ORDER BY created_at DESC`);
+
+  // Incidents
+  stmts.insertIncident = db.prepare(`
+    INSERT INTO incidents (id, server_id, kind, severity, title, details, suggested_actions, opened_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.updateOpenIncident = db.prepare(`
+    UPDATE incidents SET severity = ?, title = ?, details = ?, suggested_actions = ?
+    WHERE id = ? AND closed_at IS NULL
+  `);
+  stmts.findOpenIncident = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND kind = ? AND closed_at IS NULL LIMIT 1
+  `);
+  stmts.getIncident = db.prepare(`SELECT * FROM incidents WHERE id = ?`);
+  stmts.getOpenIncidents = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND closed_at IS NULL ORDER BY opened_at DESC
+  `);
+  stmts.getAllOpenIncidents = db.prepare(`
+    SELECT * FROM incidents WHERE closed_at IS NULL ORDER BY opened_at DESC
+  `);
+  stmts.ackIncident = db.prepare(`UPDATE incidents SET acked_at = ? WHERE id = ?`);
+  stmts.closeIncident = db.prepare(`UPDATE incidents SET closed_at = ? WHERE id = ?`);
+  stmts.cleanupOldIncidents = db.prepare(`
+    DELETE FROM incidents WHERE closed_at IS NOT NULL AND closed_at < ?
+  `);
+  stmts.getIncidentHistory = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND opened_at >= ? ORDER BY opened_at DESC
+  `);
 }
 
 function close() {
@@ -581,6 +609,53 @@ function acceptBaseline(baselineId) {
   return stmts.getBaseline.get(baselineId);
 }
 
+// --- Incidents ---
+
+function upsertIncident(serverId, inc) {
+  const existing = stmts.findOpenIncident.get(serverId, inc.kind);
+  const detailsStr = JSON.stringify(inc.details || {});
+  const actionsStr = JSON.stringify(inc.suggested_actions || []);
+  if (existing) {
+    stmts.updateOpenIncident.run(inc.severity, inc.title, detailsStr, actionsStr, existing.id);
+    return stmts.getIncident.get(existing.id);
+  }
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  stmts.insertIncident.run(id, serverId, inc.kind, inc.severity, inc.title, detailsStr, actionsStr, now);
+  return stmts.getIncident.get(id);
+}
+
+function getIncident(id) {
+  return stmts.getIncident.get(id) || null;
+}
+
+function getOpenIncidents(serverId) {
+  if (serverId) return stmts.getOpenIncidents.all(serverId);
+  return stmts.getAllOpenIncidents.all();
+}
+
+function ackIncident(id) {
+  stmts.ackIncident.run(Math.floor(Date.now() / 1000), id);
+  return getIncident(id);
+}
+
+function closeIncident(id) {
+  stmts.closeIncident.run(Math.floor(Date.now() / 1000), id);
+  return getIncident(id);
+}
+
+function getIncidentHistory(serverId, sinceTs, filters) {
+  let rows = stmts.getIncidentHistory.all(serverId, sinceTs);
+  if (filters && filters.kind) rows = rows.filter(r => r.kind === filters.kind);
+  if (filters && filters.severity) rows = rows.filter(r => r.severity === filters.severity);
+  return rows;
+}
+
+function cleanupOldIncidents() {
+  const cutoff = Math.floor(Date.now() / 1000) - 180 * 24 * 3600;
+  stmts.cleanupOldIncidents.run(cutoff);
+}
+
 module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
@@ -592,5 +667,7 @@ module.exports = {
   insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs,
   insertHealthEvent, getRecentHealthEvents, cleanupOldHealthEvents,
   insertVersionSnapshot, getLatestVersionSnapshot, cleanupOldVersionSnapshots,
-  saveBaseline, getActiveBaseline, listBaselines, acceptBaseline
+  saveBaseline, getActiveBaseline, listBaselines, acceptBaseline,
+  upsertIncident, getIncident, getOpenIncidents, ackIncident, closeIncident,
+  getIncidentHistory, cleanupOldIncidents
 };

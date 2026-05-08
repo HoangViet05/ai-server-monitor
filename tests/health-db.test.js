@@ -95,3 +95,56 @@ describe('baselines', () => {
     assert.strictEqual(active.id, oldOne.id);
   });
 });
+
+describe('incidents', () => {
+  let openId;
+
+  it('opens a new incident via upsert', () => {
+    const inc = db.upsertIncident(serverId, {
+      kind: 'disk_full', severity: 'warn', title: 'Disk / 87%',
+      details: { mount: '/', percent: 87 },
+      suggested_actions: [{ label: 'Show largest folders', command: 'du -sh /var/log' }]
+    });
+    assert.ok(inc.id);
+    assert.strictEqual(inc.severity, 'warn');
+    assert.strictEqual(inc.closed_at, null);
+    openId = inc.id;
+  });
+
+  it('upsert updates details of existing open incident (same kind)', () => {
+    const inc = db.upsertIncident(serverId, {
+      kind: 'disk_full', severity: 'critical', title: 'Disk / 96%',
+      details: { mount: '/', percent: 96 }, suggested_actions: []
+    });
+    assert.strictEqual(inc.id, openId);
+    assert.strictEqual(inc.severity, 'critical');
+    const open = db.getOpenIncidents(serverId);
+    assert.strictEqual(open.filter(i => i.kind === 'disk_full').length, 1);
+  });
+
+  it('ackIncident sets acked_at', () => {
+    db.ackIncident(openId);
+    const inc = db.getIncident(openId);
+    assert.ok(inc.acked_at > 0);
+    assert.strictEqual(inc.closed_at, null);
+  });
+
+  it('closeIncident sets closed_at and removes from open list', () => {
+    db.closeIncident(openId);
+    const inc = db.getIncident(openId);
+    assert.ok(inc.closed_at > 0);
+    const open = db.getOpenIncidents(serverId);
+    assert.strictEqual(open.filter(i => i.id === openId).length, 0);
+  });
+
+  it('getIncidentHistory returns closed and open with filters', () => {
+    db.upsertIncident(serverId, {
+      kind: 'mongo_down', severity: 'critical', title: 'Mongo unreachable',
+      details: {}, suggested_actions: []
+    });
+    const all = db.getIncidentHistory(serverId, 0);
+    assert.ok(all.length >= 2);
+    const onlyDisk = db.getIncidentHistory(serverId, 0, { kind: 'disk_full' });
+    assert.ok(onlyDisk.every(i => i.kind === 'disk_full'));
+  });
+});
