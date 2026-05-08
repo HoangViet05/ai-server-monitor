@@ -1,5 +1,6 @@
 const App = (() => {
   const socket = io();
+  if (window.HealthTab) window.HealthTab.init(socket);
   let servers = [];
   let selectedServerId = null;
   let currentPullId = null;
@@ -337,6 +338,7 @@ const App = (() => {
     }
 
     selectedServerId = serverId;
+    if (window.HealthTab) window.HealthTab.show(serverId);
   }
 
   function updateDetailContent(server, serverId) {
