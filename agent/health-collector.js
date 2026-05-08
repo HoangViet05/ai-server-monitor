@@ -138,6 +138,72 @@ async function probeExternalDeps() {
   return { kind: 'ext_deps', ok, payload, errors, ts: Math.floor(Date.now() / 1000) };
 }
 
+function _pipFreeze(venvPath) {
+  const pip = `${venvPath}/bin/pip`;
+  const out = _safeExec(`"${pip}" freeze 2>/dev/null`, { timeout: 30000 });
+  if (!out) return null;
+  const result = {};
+  for (const line of out.split('\n')) {
+    const m = line.match(/^([A-Za-z0-9_\-.]+)==(.+)$/);
+    if (m) result[m[1].toLowerCase()] = m[2].trim();
+  }
+  return result;
+}
+
+function _systemPkgs(patterns) {
+  const result = {};
+  for (const pattern of patterns) {
+    const out = _safeExec(`dpkg-query -W -f='\${Package}=\${Version}\\n' '${pattern}' 2>/dev/null`);
+    if (!out) continue;
+    for (const line of out.split('\n')) {
+      const m = line.match(/^([^=]+)=(.+)$/);
+      if (m) result[m[1].trim()] = m[2].trim();
+    }
+  }
+  const driver = _safeExec(`nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1`);
+  if (driver) result['nvidia-driver'] = driver.trim();
+  const cuda = _safeExec(`nvcc --version 2>/dev/null | grep -oE 'release [0-9.]+' | awk '{print $2}'`);
+  if (cuda) result['cuda-toolkit'] = cuda.trim();
+  return result;
+}
+
+function _nodeVersions() {
+  const result = {};
+  const node = _safeExec('node -v 2>/dev/null');
+  if (node) result.node = node.trim().replace(/^v/, '');
+  const npm = _safeExec('npm -v 2>/dev/null');
+  if (npm) result.npm = npm.trim();
+  const pm2 = _safeExec('pm2 -v 2>/dev/null');
+  if (pm2) result.pm2 = pm2.trim();
+  const globals = _safeExec('npm list -g --depth=0 --json 2>/dev/null', { timeout: 15000 });
+  if (globals) {
+    try {
+      const parsed = JSON.parse(globals);
+      result.globals = {};
+      for (const [name, info] of Object.entries(parsed.dependencies || {})) {
+        result.globals[name] = info.version;
+      }
+    } catch { /* ignore */ }
+  }
+  return result;
+}
+
+async function snapshotVersions() {
+  const venvs = (config && config.monitored_python_envs) || [];
+  const sysPatterns = (config && config.monitored_system_pkgs) || [];
+
+  const pip_freeze = {};
+  for (const venv of venvs) {
+    const r = _pipFreeze(venv);
+    if (r) pip_freeze[venv] = r;
+  }
+  const system_pkgs = _systemPkgs(sysPatterns);
+  const node_pkgs = _nodeVersions();
+  const watch_pip = (config && config.watch_pip_packages) || [];
+
+  return { pip_freeze, system_pkgs, node_pkgs, watch_pip, ts: Math.floor(Date.now() / 1000) };
+}
+
 async function probeHostHealth() {
   const errors = [];
   const ram = _readMeminfo();
@@ -183,7 +249,18 @@ function start(_socket, _config) {
     }
   }, extInterval));
 
-  console.log(`[health] Started — host every ${hostInterval/1000}s, ext-deps every ${extInterval/1000}s`);
+  const verInterval = config.version_interval || 300000;
+  timers.push(setInterval(async () => {
+    if (!socket || !socket.connected) return;
+    try {
+      const snap = await snapshotVersions();
+      socket.emit('version:snapshot', snap);
+    } catch (err) {
+      console.error('[health] snapshotVersions error:', err.message);
+    }
+  }, verInterval));
+
+  console.log(`[health] Started — host ${hostInterval/1000}s, ext-deps ${extInterval/1000}s, versions ${verInterval/1000}s`);
 }
 
 function stop() {
@@ -191,4 +268,4 @@ function stop() {
   timers = [];
 }
 
-module.exports = { start, stop, probeHostHealth, probeExternalDeps };
+module.exports = { start, stop, probeHostHealth, probeExternalDeps, snapshotVersions };
