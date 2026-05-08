@@ -101,7 +101,7 @@ function buildStreamScript() {
     'if command -v intel_gpu_top >/dev/null 2>&1; then',
     '  (while true; do ${TASKSET_CMD:+$TASKSET_CMD} timeout 3 intel_gpu_top -J -s 1800 -l 1 > /tmp/.smon_gpu_$$ 2>/dev/null || sleep 2; done) &',
     '  GPID=$!',
-    '  trap "kill $GPID 2>/dev/null; rm -f /tmp/.smon_gpu_$$" EXIT',
+    '  trap "kill $GPID 2>/dev/null; rm -f /tmp/.smon_gpu_$$ /tmp/.smon_net_$$" EXIT',
     'fi',
     '',
     // Main loop function -- run under taskset if available
@@ -118,6 +118,11 @@ function buildStreamScript() {
     // Disk usage of root filesystem -- every tick (df is cheap)
     '    echo "===DISK==="',
     '    df -B1 -P / 2>/dev/null | tail -n 1',
+    // Network throughput -- delta between current and previous tick snapshot
+    '    echo "===NET==="',
+    '    if [ -f /tmp/.smon_net_$$ ]; then cat /tmp/.smon_net_$$; fi',
+    '    echo "---NET_SNAP---"',
+    '    awk \'NR>2{print $1,$2,$10}\' /proc/net/dev 2>/dev/null | tee /tmp/.smon_net_$$',
     // iGPU: read from temp file -- every tick (instant read, no spawn)
     '    echo "===GPU==="',
     '    cat /tmp/.smon_gpu_$$ 2>/dev/null',
@@ -299,6 +304,15 @@ function processTick(serverId, tickData) {
     if (disk) {
       metrics.disk_total = disk.disk_total;
       metrics.disk_used = disk.disk_used;
+    }
+  }
+
+  // Parse network throughput
+  if (sections.NET) {
+    const net = parseNetworkOutput(sections.NET);
+    if (net) {
+      metrics.net_rx_bytes = net.net_rx_bytes;
+      metrics.net_tx_bytes = net.net_tx_bytes;
     }
   }
 
@@ -602,9 +616,53 @@ function parseDiskOutput(output) {
   } catch { return null; }
 }
 
+// Parse /proc/net/dev output (two snapshots: previous tick saved to file, current tick)
+// separated by ---NET_SNAP--- to get bytes/sec over the ~2s tick interval
+// awk output format: "iface: rx_bytes tx_bytes" per line
+function parseNetworkOutput(output) {
+  try {
+    const parts = output.split('---NET_SNAP---');
+    if (parts.length < 2) return null;
+
+    const parseSnapshot = (text) => {
+      const map = {};
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Format: "eth0: 12345 67890"
+        const m = trimmed.match(/^(\S+):\s+(\d+)\s+(\d+)/);
+        if (!m) continue;
+        const iface = m[1];
+        // Skip loopback
+        if (iface === 'lo') continue;
+        map[iface] = { rx: parseInt(m[2]), tx: parseInt(m[3]) };
+      }
+      return map;
+    };
+
+    const snap1 = parseSnapshot(parts[0]);
+    const snap2 = parseSnapshot(parts[1]);
+
+    // Need both snapshots to calculate delta
+    if (Object.keys(snap1).length === 0 || Object.keys(snap2).length === 0) return null;
+
+    let totalRx = 0, totalTx = 0;
+    for (const iface of Object.keys(snap2)) {
+      if (!snap1[iface]) continue;
+      const rx = snap2[iface].rx - snap1[iface].rx;
+      const tx = snap2[iface].tx - snap1[iface].tx;
+      // Guard against counter wrap or negative values
+      if (rx >= 0) totalRx += rx;
+      if (tx >= 0) totalTx += tx;
+    }
+
+    // Delta is over ~2s tick interval, convert to bytes/sec
+    return { net_rx_bytes: Math.round(totalRx / 2), net_tx_bytes: Math.round(totalTx / 2) };
+  } catch { return null; }
+}
+
 // Parse GPU names from ===GPUNAMES=== section
-function parseGpuNames(output) {
-  const names = { igpu: '', dgpu: '' };
+function parseGpuNames(output) {  const names = { igpu: '', dgpu: '' };
   for (const line of output.split('\n')) {
     if (line.startsWith('igpu:')) {
       names.igpu = line.substring(5).trim();

@@ -73,6 +73,10 @@ const App = (() => {
             <div class="metric-label">PM2 Apps</div>
             <div class="metric-value" id="card-pm2-${s.id}">--</div>
           </div>
+          <div class="metric card-net-metric" id="card-net-wrap-${s.id}">
+            <div class="metric-label">Network</div>
+            <div class="metric-value metric-net" id="card-net-${s.id}">--</div>
+          </div>
         </div>
         <div class="card-footer">
           <span>${s.status === 'offline' ? 'Last seen: ' + lastSeen : 'Mode: ' + s.mode}</span>
@@ -200,6 +204,15 @@ const App = (() => {
         if (wrap) wrap.style.display = '';
       }
     }
+    // Network
+    const netEl = document.getElementById(`card-net-${serverId}`);
+    if (netEl) {
+      if (m.net_rx_bytes != null && m.net_tx_bytes != null) {
+        netEl.innerHTML = `<span class="net-rx">↓ ${formatNetSpeed(m.net_rx_bytes)}</span> <span class="net-tx">↑ ${formatNetSpeed(m.net_tx_bytes)}</span>`;
+      } else {
+        netEl.textContent = '--';
+      }
+    }
     // Update GPU labels with short names from gpu_names
     const gpuNames = m.gpu_names || getServerGpuNames(serverId);
     if (gpuNames) {
@@ -241,6 +254,15 @@ const App = (() => {
     if (m) return m[0];
     // Fallback: last meaningful part
     return name.length > 15 ? name.substring(name.length - 15) : name;
+  }
+
+  // Format network speed from bytes/sec to human-readable
+  function formatNetSpeed(bytesPerSec) {
+    if (bytesPerSec == null) return '--';
+    if (bytesPerSec >= 1073741824) return (bytesPerSec / 1073741824).toFixed(1) + ' GB/s';
+    if (bytesPerSec >= 1048576) return (bytesPerSec / 1048576).toFixed(1) + ' MB/s';
+    if (bytesPerSec >= 1024) return (bytesPerSec / 1024).toFixed(0) + ' KB/s';
+    return bytesPerSec + ' B/s';
   }
 
   // --- Server Detail ---
