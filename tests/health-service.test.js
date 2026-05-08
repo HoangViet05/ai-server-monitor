@@ -59,3 +59,93 @@ describe('computeVersionDrift', () => {
     assert.strictEqual(drift.severity, 'warn');
   });
 });
+
+const { evaluate, _resetSustainedState } = require('../health-service');
+
+describe('evaluate (host_health)', () => {
+  beforeEach(() => _resetSustainedState());
+
+  it('opens disk_full incident on first event > 95%', () => {
+    const ev = {
+      kind: 'host_health', ok: true,
+      payload: { disk: [{ mount: '/', percent: 96, used: 96, total: 100 }] },
+      ts: 1700000000
+    };
+    const result = evaluate('srv1', ev);
+    const open = result.filter(r => r.action === 'open');
+    assert.ok(open.find(i => i.kind === 'disk_full' && i.severity === 'critical'));
+  });
+
+  it('opens warn for disk 86% on first event', () => {
+    const ev = {
+      kind: 'host_health', ok: true,
+      payload: { disk: [{ mount: '/', percent: 86, used: 86, total: 100 }] },
+      ts: 1700000000
+    };
+    const result = evaluate('srv1', ev);
+    assert.ok(result.find(r => r.action === 'open' && r.severity === 'warn' && r.kind === 'disk_full'));
+  });
+
+  it('does NOT open ram_high on a single high tick (sustained=3)', () => {
+    const ev = {
+      kind: 'host_health', ok: true,
+      payload: { ram: { used: 90, total: 100, swap_used: 0, swap_total: 100 }, oom_events: 0 },
+      ts: 1700000000
+    };
+    const result = evaluate('srv1', ev);
+    assert.strictEqual(result.find(r => r.kind === 'ram_high'), undefined);
+  });
+
+  it('opens ram_high on 3rd consecutive high tick', () => {
+    const mk = (ts) => ({
+      kind: 'host_health', ok: true,
+      payload: { ram: { used: 90, total: 100, swap_used: 0, swap_total: 100 }, oom_events: 0 },
+      ts
+    });
+    evaluate('srv1', mk(1700000000));
+    evaluate('srv1', mk(1700000060));
+    const result = evaluate('srv1', mk(1700000120));
+    assert.ok(result.find(r => r.action === 'open' && r.kind === 'ram_high'));
+  });
+
+  it('emits close when condition clears', () => {
+    const high = (ts) => ({
+      kind: 'host_health', ok: true,
+      payload: { disk: [{ mount: '/', percent: 96, used: 96, total: 100 }] },
+      ts
+    });
+    const low = (ts) => ({
+      kind: 'host_health', ok: true,
+      payload: { disk: [{ mount: '/', percent: 50, used: 50, total: 100 }] },
+      ts
+    });
+    evaluate('srv2', high(1700000000));
+    const result = evaluate('srv2', low(1700000060));
+    assert.ok(result.find(r => r.action === 'close' && r.kind === 'disk_full'));
+  });
+});
+
+describe('evaluate (ext_deps)', () => {
+  beforeEach(() => _resetSustainedState());
+
+  it('opens mongo_down after 3 consecutive failures', () => {
+    const ev = (ts) => ({
+      kind: 'ext_deps', ok: false,
+      payload: { mongo: { ok: false }, s3: { ok: true }, tailscale: { ok: true } },
+      errors: ['mongo timeout'], ts
+    });
+    evaluate('srv3', ev(1700000000));
+    evaluate('srv3', ev(1700000060));
+    const result = evaluate('srv3', ev(1700000120));
+    assert.ok(result.find(r => r.action === 'open' && r.kind === 'mongo_down' && r.severity === 'critical'));
+  });
+
+  it('opens tailscale_down on first failure', () => {
+    const result = evaluate('srv4', {
+      kind: 'ext_deps', ok: false,
+      payload: { mongo: { ok: true }, s3: { ok: true }, tailscale: { ok: false } },
+      errors: [], ts: 1700000000
+    });
+    assert.ok(result.find(r => r.action === 'open' && r.kind === 'tailscale_down'));
+  });
+});
