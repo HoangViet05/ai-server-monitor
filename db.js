@@ -283,6 +283,27 @@ function prepareStatements() {
     SELECT * FROM health_events WHERE server_id = ? AND ts >= ? AND kind = ? ORDER BY ts DESC
   `);
   stmts.cleanupOldHealthEvents = db.prepare(`DELETE FROM health_events WHERE ts < ?`);
+
+  // Version snapshots
+  stmts.insertVersionSnapshot = db.prepare(`
+    INSERT INTO version_snapshots (server_id, pip_freeze, system_pkgs, node_pkgs, ts)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmts.getLatestVersionSnapshot = db.prepare(`
+    SELECT * FROM version_snapshots WHERE server_id = ? ORDER BY ts DESC LIMIT 1
+  `);
+  stmts.cleanupOldVersionSnapshots = db.prepare(`DELETE FROM version_snapshots WHERE ts < ?`);
+
+  // Baselines
+  stmts.insertBaseline = db.prepare(`
+    INSERT INTO baselines (id, server_id, label, pip_freeze, system_pkgs, node_pkgs, active, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `);
+  stmts.deactivateBaselines = db.prepare(`UPDATE baselines SET active = 0 WHERE server_id = ?`);
+  stmts.activateBaseline = db.prepare(`UPDATE baselines SET active = 1 WHERE id = ?`);
+  stmts.getBaseline = db.prepare(`SELECT * FROM baselines WHERE id = ?`);
+  stmts.getActiveBaseline = db.prepare(`SELECT * FROM baselines WHERE server_id = ? AND active = 1`);
+  stmts.listBaselines = db.prepare(`SELECT * FROM baselines WHERE server_id = ? ORDER BY created_at DESC`);
 }
 
 function close() {
@@ -500,6 +521,66 @@ function cleanupOldHealthEvents() {
   stmts.cleanupOldHealthEvents.run(cutoff);
 }
 
+// --- Version Snapshots ---
+
+function insertVersionSnapshot(serverId, snap) {
+  stmts.insertVersionSnapshot.run(
+    serverId,
+    JSON.stringify(snap.pip_freeze || {}),
+    JSON.stringify(snap.system_pkgs || {}),
+    JSON.stringify(snap.node_pkgs || {}),
+    snap.ts
+  );
+}
+
+function getLatestVersionSnapshot(serverId) {
+  return stmts.getLatestVersionSnapshot.get(serverId) || null;
+}
+
+function cleanupOldVersionSnapshots() {
+  const cutoff = Math.floor(Date.now() / 1000) - 90 * 24 * 3600;
+  stmts.cleanupOldVersionSnapshots.run(cutoff);
+}
+
+// --- Baselines ---
+
+function saveBaseline(serverId, snap, label) {
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  const tx = db.transaction(() => {
+    stmts.deactivateBaselines.run(serverId);
+    stmts.insertBaseline.run(
+      id, serverId, label || null,
+      JSON.stringify(snap.pip_freeze || {}),
+      JSON.stringify(snap.system_pkgs || {}),
+      JSON.stringify(snap.node_pkgs || {}),
+      now
+    );
+    stmts.activateBaseline.run(id);
+  });
+  tx();
+  return stmts.getBaseline.get(id);
+}
+
+function getActiveBaseline(serverId) {
+  return stmts.getActiveBaseline.get(serverId) || null;
+}
+
+function listBaselines(serverId) {
+  return stmts.listBaselines.all(serverId);
+}
+
+function acceptBaseline(baselineId) {
+  const baseline = stmts.getBaseline.get(baselineId);
+  if (!baseline) return null;
+  const tx = db.transaction(() => {
+    stmts.deactivateBaselines.run(baseline.server_id);
+    stmts.activateBaseline.run(baselineId);
+  });
+  tx();
+  return stmts.getBaseline.get(baselineId);
+}
+
 module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
@@ -509,5 +590,7 @@ module.exports = {
   createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls,
   addScoreboard, getScoreboard, getScoreboards, deleteScoreboard,
   insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs,
-  insertHealthEvent, getRecentHealthEvents, cleanupOldHealthEvents
+  insertHealthEvent, getRecentHealthEvents, cleanupOldHealthEvents,
+  insertVersionSnapshot, getLatestVersionSnapshot, cleanupOldVersionSnapshots,
+  saveBaseline, getActiveBaseline, listBaselines, acceptBaseline
 };

@@ -44,3 +44,54 @@ describe('health_events', () => {
     assert.ok(hostOnly.every(r => r.kind === 'host_health'));
   });
 });
+
+describe('version_snapshots', () => {
+  it('inserts and retrieves latest snapshot', () => {
+    db.insertVersionSnapshot(serverId, {
+      pip_freeze: { '/opt/venv': { torch: '2.0.1' } },
+      system_pkgs: { tensorrt: '8.6.1' },
+      node_pkgs: { node: '20.10.0' },
+      ts: 1700000200
+    });
+    db.insertVersionSnapshot(serverId, {
+      pip_freeze: { '/opt/venv': { torch: '2.0.2' } },
+      system_pkgs: { tensorrt: '8.6.1' },
+      node_pkgs: { node: '20.10.0' },
+      ts: 1700000300
+    });
+    const latest = db.getLatestVersionSnapshot(serverId);
+    assert.strictEqual(latest.ts, 1700000300);
+    assert.deepStrictEqual(JSON.parse(latest.pip_freeze), { '/opt/venv': { torch: '2.0.2' } });
+  });
+});
+
+describe('baselines', () => {
+  it('saves baseline as active and deactivates previous', () => {
+    const b1 = db.saveBaseline(serverId, {
+      pip_freeze: { '/opt/venv': { torch: '2.0.1' } },
+      system_pkgs: {}, node_pkgs: {}
+    }, 'first');
+    assert.strictEqual(b1.active, 1);
+    const active1 = db.getActiveBaseline(serverId);
+    assert.strictEqual(active1.id, b1.id);
+
+    const b2 = db.saveBaseline(serverId, {
+      pip_freeze: { '/opt/venv': { torch: '2.0.2' } },
+      system_pkgs: {}, node_pkgs: {}
+    }, 'second');
+    const active2 = db.getActiveBaseline(serverId);
+    assert.strictEqual(active2.id, b2.id);
+
+    const all = db.listBaselines(serverId);
+    assert.strictEqual(all.length, 2);
+    assert.strictEqual(all.filter(b => b.active === 1).length, 1);
+  });
+
+  it('acceptBaseline switches active flag', () => {
+    const all = db.listBaselines(serverId);
+    const oldOne = all.find(b => b.label === 'first');
+    db.acceptBaseline(oldOne.id);
+    const active = db.getActiveBaseline(serverId);
+    assert.strictEqual(active.id, oldOne.id);
+  });
+});
