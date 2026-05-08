@@ -3,6 +3,7 @@ const { execSync, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const healthCollector = require('./health-collector');
 
 // Load config
 const configPath = path.join(__dirname, 'agent-config.json');
@@ -201,10 +202,14 @@ const serverIp = getServerIp();
 socket.on('connect', () => {
   console.log(`[Agent] Connected! Registering as ${SERVER_NAME} (${serverIp})`);
   socket.emit('register', { hostname: SERVER_NAME, ip: serverIp });
+  if (config.health && config.health.enabled) {
+    healthCollector.start(socket, config.health);
+  }
 });
 
 socket.on('disconnect', (reason) => {
   console.log(`[Agent] Disconnected: ${reason}`);
+  healthCollector.stop();
 });
 
 socket.on('connect_error', (err) => {

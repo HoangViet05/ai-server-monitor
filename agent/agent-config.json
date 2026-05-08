@@ -2,5 +2,20 @@
   "dashboard_url": "http://DASHBOARD_IP:3000",
   "interval": 10000,
   "server_name": "my-server",
-  "custom_ip": ""
+  "custom_ip": "",
+  "health": {
+    "enabled": false,
+    "host_interval": 60000,
+    "ext_deps_interval": 60000,
+    "version_interval": 300000,
+    "monitored_mounts": ["/"],
+    "monitored_python_envs": [],
+    "monitored_system_pkgs": ["tensorrt*", "libcudnn*", "cuda-*", "nvidia-driver-*"],
+    "watch_pip_packages": ["torch", "ultralytics", "tensorrt", "opencv-python"],
+    "external_deps": {
+      "mongo": { "uri": "", "timeout_ms": 5000 },
+      "s3": { "endpoint": "", "bucket": "", "access_key": "", "secret_key": "", "region": "auto", "timeout_ms": 5000 },
+      "tailscale": { "enabled": true }
+    }
+  }
 }
