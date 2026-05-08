@@ -105,6 +105,63 @@ function createTables() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_scoreboard_logs_id ON scoreboard_logs(scoreboard_id, id);
+
+    CREATE TABLE IF NOT EXISTS health_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      payload TEXT,
+      errors TEXT,
+      ts INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_health_server_ts ON health_events(server_id, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_health_server_kind_ts ON health_events(server_id, kind, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS version_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      pip_freeze TEXT,
+      system_pkgs TEXT,
+      node_pkgs TEXT,
+      ts INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_version_server_ts ON version_snapshots(server_id, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS baselines (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL,
+      label TEXT,
+      pip_freeze TEXT,
+      system_pkgs TEXT,
+      node_pkgs TEXT,
+      active INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_baselines_active ON baselines(server_id, active);
+
+    CREATE TABLE IF NOT EXISTS incidents (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      details TEXT,
+      suggested_actions TEXT,
+      opened_at INTEGER NOT NULL,
+      acked_at INTEGER,
+      closed_at INTEGER,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents(server_id, closed_at);
+    CREATE INDEX IF NOT EXISTS idx_incidents_server_opened ON incidents(server_id, opened_at DESC);
   `);
 
   // Migrations — add per-core CPU and temperature columns
