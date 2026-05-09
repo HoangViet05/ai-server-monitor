@@ -4,6 +4,8 @@
   "description": "Lightweight monitoring agent",
   "main": "agent.js",
   "dependencies": {
-    "socket.io-client": "^4.7.5"
+    "socket.io-client": "^4.7.5",
+    "mongodb": "^6.5.0",
+    "@aws-sdk/client-s3": "^3.500.0"
   }
 }

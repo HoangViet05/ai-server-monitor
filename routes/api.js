@@ -5,6 +5,7 @@ const gitOps = require('../git-operations');
 const pm2Ops = require('../pm2-operations');
 const sshPoller = require('../ssh-poller');
 const scoreboardMgr = require('../scoreboard-manager');
+const { findAgentSocket } = require('../agent-utils');
 
 function isValidIp(ip) {
   const parts = ip.split('.');
@@ -317,6 +318,133 @@ router.post('/scoreboards/:id/restart', (req, res) => {
   scoreboardMgr.stop(req.params.id);
   setTimeout(() => scoreboardMgr.start(sb), 500);
   res.json({ status: 'restarting' });
+});
+
+// --- Health management ---
+
+router.get('/servers/:id/health', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const since = Math.floor(Date.now() / 1000) - 24 * 3600;
+  const events = db.getRecentHealthEvents(req.params.id, since);
+  const open = db.getOpenIncidents(req.params.id);
+
+  const latestByKind = {};
+  for (const e of events) {
+    if (!latestByKind[e.kind]) latestByKind[e.kind] = e;
+  }
+  const decode = (e) => e ? { ...e, payload: JSON.parse(e.payload || '{}'), errors: JSON.parse(e.errors || '[]') } : null;
+
+  res.json({
+    server,
+    open_incidents: open.map(i => ({
+      ...i,
+      details: JSON.parse(i.details || '{}'),
+      suggested_actions: JSON.parse(i.suggested_actions || '[]')
+    })),
+    latest_host_health: decode(latestByKind.host_health),
+    latest_ext_deps: decode(latestByKind.ext_deps),
+  });
+});
+
+router.get('/servers/:id/incidents', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const range = parseInt(req.query.range) || 30;
+  const since = Math.floor(Date.now() / 1000) - range * 24 * 3600;
+  const filters = {};
+  if (req.query.kind) filters.kind = req.query.kind;
+  if (req.query.severity) filters.severity = req.query.severity;
+  const rows = db.getIncidentHistory(req.params.id, since, filters);
+  res.json(rows.map(r => ({
+    ...r,
+    details: JSON.parse(r.details || '{}'),
+    suggested_actions: JSON.parse(r.suggested_actions || '[]')
+  })));
+});
+
+router.post('/incidents/:id/ack', (req, res) => {
+  const inc = db.getIncident(req.params.id);
+  if (!inc) return res.status(404).json({ error: 'Incident not found' });
+  db.ackIncident(req.params.id);
+  res.json(db.getIncident(req.params.id));
+});
+
+router.post('/incidents/:id/close', (req, res) => {
+  const inc = db.getIncident(req.params.id);
+  if (!inc) return res.status(404).json({ error: 'Incident not found' });
+  db.closeIncident(req.params.id);
+  res.json(db.getIncident(req.params.id));
+});
+
+router.post('/incidents/:id/run-action', (req, res) => {
+  const inc = db.getIncident(req.params.id);
+  if (!inc) return res.status(404).json({ error: 'Incident not found' });
+  const { command } = req.body || {};
+  if (!command || typeof command !== 'string') return res.status(400).json({ error: 'command required' });
+  if (command.startsWith('#')) return res.status(400).json({ error: 'UI-only action; not executable' });
+
+  const agent = findAgentSocket(inc.server_id);
+  if (!agent) return res.status(503).json({ error: 'Agent not connected' });
+
+  const timeout = setTimeout(() => res.status(504).json({ error: 'Action timed out' }), 15000);
+  agent.emit('execute', { command }, (response) => {
+    clearTimeout(timeout);
+    if (res.headersSent) return;
+    if (response && response.error) return res.status(500).json({ error: response.error, output: response.output || '' });
+    res.json({ output: (response && response.output) || '' });
+  });
+});
+
+router.get('/servers/:id/versions/current', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const snap = db.getLatestVersionSnapshot(req.params.id);
+  if (!snap) return res.json(null);
+  res.json({
+    ts: snap.ts,
+    pip_freeze: JSON.parse(snap.pip_freeze || '{}'),
+    system_pkgs: JSON.parse(snap.system_pkgs || '{}'),
+    node_pkgs: JSON.parse(snap.node_pkgs || '{}')
+  });
+});
+
+router.get('/servers/:id/baselines', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const rows = db.listBaselines(req.params.id);
+  res.json(rows.map(b => ({
+    id: b.id, label: b.label, active: b.active, created_at: b.created_at,
+    pip_freeze: JSON.parse(b.pip_freeze || '{}'),
+    system_pkgs: JSON.parse(b.system_pkgs || '{}'),
+    node_pkgs: JSON.parse(b.node_pkgs || '{}')
+  })));
+});
+
+router.post('/servers/:id/baselines', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const snap = db.getLatestVersionSnapshot(req.params.id);
+  if (!snap) return res.status(400).json({ error: 'No version snapshot available yet for this server' });
+  const baseline = db.saveBaseline(req.params.id, {
+    pip_freeze: JSON.parse(snap.pip_freeze || '{}'),
+    system_pkgs: JSON.parse(snap.system_pkgs || '{}'),
+    node_pkgs: JSON.parse(snap.node_pkgs || '{}')
+  }, req.body && req.body.label);
+
+  const open = db.getOpenIncidents(req.params.id).find(i => i.kind === 'version_drift');
+  if (open) db.closeIncident(open.id);
+
+  res.status(201).json(baseline);
+});
+
+router.post('/baselines/:id/accept', (req, res) => {
+  const updated = db.acceptBaseline(req.params.id);
+  if (!updated) return res.status(404).json({ error: 'Baseline not found' });
+  const open = db.getOpenIncidents(updated.server_id).find(i => i.kind === 'version_drift');
+  if (open) db.closeIncident(open.id);
+  res.json(updated);
 });
 
 module.exports = router;

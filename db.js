@@ -105,6 +105,63 @@ function createTables() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_scoreboard_logs_id ON scoreboard_logs(scoreboard_id, id);
+
+    CREATE TABLE IF NOT EXISTS health_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      payload TEXT,
+      errors TEXT,
+      ts INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_health_server_ts ON health_events(server_id, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_health_server_kind_ts ON health_events(server_id, kind, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS version_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      pip_freeze TEXT,
+      system_pkgs TEXT,
+      node_pkgs TEXT,
+      ts INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_version_server_ts ON version_snapshots(server_id, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS baselines (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL,
+      label TEXT,
+      pip_freeze TEXT,
+      system_pkgs TEXT,
+      node_pkgs TEXT,
+      active INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_baselines_active ON baselines(server_id, active);
+
+    CREATE TABLE IF NOT EXISTS incidents (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      details TEXT,
+      suggested_actions TEXT,
+      opened_at INTEGER NOT NULL,
+      acked_at INTEGER,
+      closed_at INTEGER,
+      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents(server_id, closed_at);
+    CREATE INDEX IF NOT EXISTS idx_incidents_server_opened ON incidents(server_id, opened_at DESC);
   `);
 
   // Migrations — add per-core CPU and temperature columns
@@ -213,6 +270,76 @@ function prepareStatements() {
   stmts.getGitPull = db.prepare('SELECT * FROM git_pulls WHERE id = ?');
   stmts.getGitPulls = db.prepare('SELECT * FROM git_pulls WHERE server_id = ? ORDER BY started_at DESC LIMIT ?');
   stmts.cleanupOldGitPulls = db.prepare('DELETE FROM git_pulls WHERE started_at < ?');
+
+  // Health events
+  stmts.insertHealthEvent = db.prepare(`
+    INSERT INTO health_events (server_id, kind, ok, payload, errors, ts)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  stmts.getRecentHealthEventsAll = db.prepare(`
+    SELECT * FROM health_events WHERE server_id = ? AND ts >= ? ORDER BY ts DESC
+  `);
+  stmts.getRecentHealthEventsKind = db.prepare(`
+    SELECT * FROM health_events WHERE server_id = ? AND ts >= ? AND kind = ? ORDER BY ts DESC
+  `);
+  stmts.cleanupOldHealthEvents = db.prepare(`DELETE FROM health_events WHERE ts < ?`);
+
+  // Version snapshots
+  stmts.insertVersionSnapshot = db.prepare(`
+    INSERT INTO version_snapshots (server_id, pip_freeze, system_pkgs, node_pkgs, ts)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmts.getLatestVersionSnapshot = db.prepare(`
+    SELECT * FROM version_snapshots WHERE server_id = ? ORDER BY ts DESC LIMIT 1
+  `);
+  stmts.cleanupOldVersionSnapshots = db.prepare(`DELETE FROM version_snapshots WHERE ts < ?`);
+
+  // Baselines
+  stmts.insertBaseline = db.prepare(`
+    INSERT INTO baselines (id, server_id, label, pip_freeze, system_pkgs, node_pkgs, active, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+  `);
+  stmts.deactivateBaselines = db.prepare(`UPDATE baselines SET active = 0 WHERE server_id = ?`);
+  stmts.activateBaseline = db.prepare(`UPDATE baselines SET active = 1 WHERE id = ?`);
+  stmts.getBaseline = db.prepare(`SELECT * FROM baselines WHERE id = ?`);
+  stmts.getActiveBaseline = db.prepare(`SELECT * FROM baselines WHERE server_id = ? AND active = 1`);
+  stmts.listBaselines = db.prepare(`SELECT * FROM baselines WHERE server_id = ? ORDER BY created_at DESC`);
+
+  // Incidents
+  stmts.insertIncident = db.prepare(`
+    INSERT INTO incidents (id, server_id, kind, severity, title, details, suggested_actions, opened_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmts.updateOpenIncident = db.prepare(`
+    UPDATE incidents SET severity = ?, title = ?, details = ?, suggested_actions = ?
+    WHERE id = ? AND closed_at IS NULL
+  `);
+  stmts.findOpenIncident = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND kind = ? AND closed_at IS NULL LIMIT 1
+  `);
+  stmts.getIncident = db.prepare(`SELECT * FROM incidents WHERE id = ?`);
+  stmts.getOpenIncidents = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND closed_at IS NULL ORDER BY opened_at DESC
+  `);
+  stmts.getAllOpenIncidents = db.prepare(`
+    SELECT * FROM incidents WHERE closed_at IS NULL ORDER BY opened_at DESC
+  `);
+  stmts.ackIncident = db.prepare(`UPDATE incidents SET acked_at = ? WHERE id = ?`);
+  stmts.closeIncident = db.prepare(`UPDATE incidents SET closed_at = ? WHERE id = ?`);
+  stmts.cleanupOldIncidents = db.prepare(`
+    DELETE FROM incidents WHERE closed_at IS NOT NULL AND closed_at < ?
+  `);
+  stmts.getIncidentHistory = db.prepare(`
+    SELECT * FROM incidents WHERE server_id = ? AND opened_at >= ? ORDER BY opened_at DESC
+  `);
+  stmts.cleanupExcessBaselines = db.prepare(`
+    DELETE FROM baselines WHERE id IN (
+      SELECT id FROM baselines
+      WHERE server_id = ? AND active = 0
+      ORDER BY created_at DESC
+      LIMIT -1 OFFSET 3
+    )
+  `);
 }
 
 function close() {
@@ -412,6 +539,138 @@ function cleanupOldGitPulls() {
   stmts.cleanupOldGitPulls.run(cutoff);
 }
 
+// --- Health Events ---
+
+function insertHealthEvent(serverId, ev) {
+  const payload = ev.payload != null ? JSON.stringify(ev.payload) : null;
+  const errors = ev.errors != null ? JSON.stringify(ev.errors) : null;
+  stmts.insertHealthEvent.run(serverId, ev.kind, ev.ok ? 1 : 0, payload, errors, ev.ts);
+}
+
+function getRecentHealthEvents(serverId, sinceTs, kind) {
+  if (kind) return stmts.getRecentHealthEventsKind.all(serverId, sinceTs, kind);
+  return stmts.getRecentHealthEventsAll.all(serverId, sinceTs);
+}
+
+function cleanupOldHealthEvents() {
+  const cutoff = Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
+  stmts.cleanupOldHealthEvents.run(cutoff);
+}
+
+// --- Version Snapshots ---
+
+function insertVersionSnapshot(serverId, snap) {
+  stmts.insertVersionSnapshot.run(
+    serverId,
+    JSON.stringify(snap.pip_freeze || {}),
+    JSON.stringify(snap.system_pkgs || {}),
+    JSON.stringify(snap.node_pkgs || {}),
+    snap.ts
+  );
+}
+
+function getLatestVersionSnapshot(serverId) {
+  return stmts.getLatestVersionSnapshot.get(serverId) || null;
+}
+
+function cleanupOldVersionSnapshots() {
+  const cutoff = Math.floor(Date.now() / 1000) - 90 * 24 * 3600;
+  stmts.cleanupOldVersionSnapshots.run(cutoff);
+}
+
+// --- Baselines ---
+
+function saveBaseline(serverId, snap, label) {
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  const tx = db.transaction(() => {
+    stmts.deactivateBaselines.run(serverId);
+    stmts.insertBaseline.run(
+      id, serverId, label || null,
+      JSON.stringify(snap.pip_freeze || {}),
+      JSON.stringify(snap.system_pkgs || {}),
+      JSON.stringify(snap.node_pkgs || {}),
+      now
+    );
+    stmts.activateBaseline.run(id);
+  });
+  tx();
+  return stmts.getBaseline.get(id);
+}
+
+function getActiveBaseline(serverId) {
+  return stmts.getActiveBaseline.get(serverId) || null;
+}
+
+function listBaselines(serverId) {
+  return stmts.listBaselines.all(serverId);
+}
+
+function acceptBaseline(baselineId) {
+  const baseline = stmts.getBaseline.get(baselineId);
+  if (!baseline) return null;
+  const tx = db.transaction(() => {
+    stmts.deactivateBaselines.run(baseline.server_id);
+    stmts.activateBaseline.run(baselineId);
+  });
+  tx();
+  return stmts.getBaseline.get(baselineId);
+}
+
+// --- Incidents ---
+
+function upsertIncident(serverId, inc) {
+  const existing = stmts.findOpenIncident.get(serverId, inc.kind);
+  const detailsStr = JSON.stringify(inc.details || {});
+  const actionsStr = JSON.stringify(inc.suggested_actions || []);
+  if (existing) {
+    stmts.updateOpenIncident.run(inc.severity, inc.title, detailsStr, actionsStr, existing.id);
+    return stmts.getIncident.get(existing.id);
+  }
+  const id = uuidv4();
+  const now = Math.floor(Date.now() / 1000);
+  stmts.insertIncident.run(id, serverId, inc.kind, inc.severity, inc.title, detailsStr, actionsStr, now);
+  return stmts.getIncident.get(id);
+}
+
+function getIncident(id) {
+  return stmts.getIncident.get(id) || null;
+}
+
+function getOpenIncidents(serverId) {
+  if (serverId) return stmts.getOpenIncidents.all(serverId);
+  return stmts.getAllOpenIncidents.all();
+}
+
+function ackIncident(id) {
+  stmts.ackIncident.run(Math.floor(Date.now() / 1000), id);
+  return getIncident(id);
+}
+
+function closeIncident(id) {
+  stmts.closeIncident.run(Math.floor(Date.now() / 1000), id);
+  return getIncident(id);
+}
+
+function getIncidentHistory(serverId, sinceTs, filters) {
+  let rows = stmts.getIncidentHistory.all(serverId, sinceTs);
+  if (filters && filters.kind) rows = rows.filter(r => r.kind === filters.kind);
+  if (filters && filters.severity) rows = rows.filter(r => r.severity === filters.severity);
+  return rows;
+}
+
+function cleanupOldIncidents() {
+  const cutoff = Math.floor(Date.now() / 1000) - 180 * 24 * 3600;
+  stmts.cleanupOldIncidents.run(cutoff);
+}
+
+function cleanupExcessBaselines() {
+  const servers = stmts.getServers.all();
+  for (const s of servers) {
+    stmts.cleanupExcessBaselines.run(s.id);
+  }
+}
+
 module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
@@ -420,5 +679,10 @@ module.exports = {
   insertLogs, getLogs, cleanupExcessLogs,
   createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls,
   addScoreboard, getScoreboard, getScoreboards, deleteScoreboard,
-  insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs
+  insertScoreboardLog, getScoreboardLogs, cleanupExcessScoreboardLogs,
+  insertHealthEvent, getRecentHealthEvents, cleanupOldHealthEvents,
+  insertVersionSnapshot, getLatestVersionSnapshot, cleanupOldVersionSnapshots,
+  saveBaseline, getActiveBaseline, listBaselines, acceptBaseline,
+  upsertIncident, getIncident, getOpenIncidents, ackIncident, closeIncident,
+  getIncidentHistory, cleanupOldIncidents, cleanupExcessBaselines
 };
