@@ -140,9 +140,12 @@ function getIgpuInfo() {
 
     let igpu_percent = 0;
     if (engines['Render/3D'] !== undefined) {
-      igpu_percent = typeof engines['Render/3D'] === 'object'
-        ? (engines['Render/3D'].busy ?? 0)
-        : engines['Render/3D'];
+      if (typeof engines['Render/3D'] === 'object') {
+        const busy = engines['Render/3D'].busy;
+        igpu_percent = (busy === undefined || busy === null) ? 0 : busy;
+      } else {
+        igpu_percent = engines['Render/3D'];
+      }
     } else {
       let totalBusy = 0, count = 0;
       for (const engine of Object.values(engines)) {
