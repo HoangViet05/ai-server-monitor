@@ -540,10 +540,10 @@ const App = (() => {
   }
 
   function showTempChart() {
-    const box = document.getElementById('chart-temp-box');
-    if (!box) return;
+    const modal = document.getElementById('modal-temp-chart');
+    if (!modal) return;
     tempChartVisible = true;
-    box.classList.remove('hidden');
+    modal.classList.remove('hidden');
     const tempEl = document.getElementById('cpu-temp');
     tempEl?.classList.add('active');
     if (tempEl) tempEl.title = 'Hide temperature chart';
@@ -554,9 +554,9 @@ const App = (() => {
   }
 
   function hideTempChart() {
-    const box = document.getElementById('chart-temp-box');
+    const modal = document.getElementById('modal-temp-chart');
     tempChartVisible = false;
-    if (box) box.classList.add('hidden');
+    if (modal) modal.classList.add('hidden');
     const tempEl = document.getElementById('cpu-temp');
     tempEl?.classList.remove('active');
     if (tempEl) tempEl.title = 'Show temperature chart';
@@ -1021,6 +1021,7 @@ const App = (() => {
     document.getElementById('btn-pull-all').addEventListener('click', handlePullAll);
     document.getElementById('btn-close-pull-logs').addEventListener('click', closePullLogs);
     document.getElementById('cpu-temp').addEventListener('click', toggleTempChart);
+    document.getElementById('btn-close-temp-chart').addEventListener('click', hideTempChart);
 
     document.getElementById('form-mode').addEventListener('change', (e) => {
       document.getElementById('ssh-fields').classList.toggle('hidden', e.target.value !== 'ssh');
@@ -1043,9 +1044,17 @@ const App = (() => {
       if (e.target.classList.contains('modal')) App.LogModal.close();
     });
 
+    document.getElementById('modal-temp-chart').addEventListener('click', (e) => {
+      if (e.target.classList.contains('modal')) hideTempChart();
+    });
+
     // ESC key to close modals
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (tempChartVisible) {
+          hideTempChart();
+          return;
+        }
         if (App.LogModal.getState().isOpen) {
           App.LogModal.close();
         }

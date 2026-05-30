@@ -58,10 +58,6 @@
         <h3>RAM</h3>
         <canvas id="chart-ram"></canvas>
       </div>
-      <div id="chart-temp-box" class="chart-box hidden">
-        <h3>Temperature</h3>
-        <canvas id="chart-temp"></canvas>
-      </div>
       <div id="gpu-charts-container"></div>
     </div>
 
@@ -167,6 +163,18 @@
         </div>
       </div>
       <div id="log-modal-content" class="log-content"></div>
+    </div>
+  </div>
+
+  <div id="modal-temp-chart" class="modal hidden">
+    <div class="modal-content modal-chart">
+      <div class="log-header">
+        <h2>Temperature</h2>
+        <button id="btn-close-temp-chart" class="btn btn-sm">Close</button>
+      </div>
+      <div class="chart-box temp-popup-chart">
+        <canvas id="chart-temp"></canvas>
+      </div>
     </div>
   </div>
 
