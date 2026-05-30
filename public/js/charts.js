@@ -1,12 +1,13 @@
 const Charts = (() => {
   const chartInstances = {};
   const chartData = {};
-  let currentTimeRange = 'all';
+  let currentTimeRange = '5h';
   const TIME_RANGE_SECONDS = {
     '5m': 300,
     '10m': 600,
     '30m': 1800,
     '1h': 3600,
+    '5h': 18000,
     'all': 0
   };
 
@@ -189,7 +190,7 @@ const Charts = (() => {
   }
 
   function setTimeRange(range) {
-    const validRanges = ['all', '1h', '30m', '10m', '5m'];
+    const validRanges = ['all', '5h', '1h', '30m', '10m', '5m'];
     if (!validRanges.includes(range)) {
       console.warn(`Invalid time range: ${range}, defaulting to 'all'`);
       range = 'all';

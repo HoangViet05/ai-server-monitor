@@ -25,12 +25,13 @@ function loadChartsModule() {
     'chart-ram': [],
     'chart-igpu': []
   };
-  let currentTimeRange = 'all';
+  let currentTimeRange = '5h';
   const TIME_RANGE_SECONDS = {
     '5m': 300,
     '10m': 600,
     '30m': 1800,
     '1h': 3600,
+    '5h': 18000,
     'all': 0
   };
 
@@ -67,7 +68,7 @@ function loadChartsModule() {
   }
 
   function setTimeRange(range) {
-    const validRanges = ['all', '1h', '30m', '10m', '5m'];
+    const validRanges = ['all', '5h', '1h', '30m', '10m', '5m'];
     if (!validRanges.includes(range)) {
       console.warn(`Invalid time range: ${range}, defaulting to 'all'`);
       range = 'all';
@@ -123,6 +124,13 @@ describe('Charts Module - Time Filtering', () => {
       const now = Math.floor(Date.now() / 1000);
       const result = Charts.calculateStartTimestamp('1h');
       const expected = now - 3600;
+      assert.ok(Math.abs(result - expected) <= 1);
+    });
+
+    it('should calculate correct timestamp for 5h range', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const result = Charts.calculateStartTimestamp('5h');
+      const expected = now - 18000;
       assert.ok(Math.abs(result - expected) <= 1);
     });
   });
@@ -186,7 +194,7 @@ describe('Charts Module - Time Filtering', () => {
     });
 
     it('should accept all valid ranges', () => {
-      const validRanges = ['all', '1h', '30m', '10m', '5m'];
+      const validRanges = ['all', '5h', '1h', '30m', '10m', '5m'];
       for (const range of validRanges) {
         Charts.setTimeRange(range);
         assert.strictEqual(Charts.getCurrentTimeRange(), range);
@@ -200,6 +208,7 @@ describe('Charts Module - Time Filtering', () => {
       assert.strictEqual(Charts.TIME_RANGE_SECONDS['10m'], 600);
       assert.strictEqual(Charts.TIME_RANGE_SECONDS['30m'], 1800);
       assert.strictEqual(Charts.TIME_RANGE_SECONDS['1h'], 3600);
+      assert.strictEqual(Charts.TIME_RANGE_SECONDS['5h'], 18000);
       assert.strictEqual(Charts.TIME_RANGE_SECONDS['all'], 0);
     });
   });
@@ -266,7 +275,7 @@ describe('Charts Module - Time Filtering', () => {
         });
       }
 
-      const ranges = ['5m', '10m', '30m', '1h', 'all'];
+      const ranges = ['5m', '10m', '30m', '1h', '5h', 'all'];
       for (const range of ranges) {
         const startTime = performance.now();
         Charts.filterDataByRange(largeDataset, range);
@@ -287,7 +296,7 @@ describe('Charts Module - Time Filtering', () => {
         });
       }
 
-      const ranges = ['5m', '10m', '30m', '1h', 'all', '5m', '10m'];
+      const ranges = ['5m', '10m', '30m', '1h', '5h', 'all', '5m', '10m'];
       const startTime = performance.now();
       
       for (const range of ranges) {
@@ -333,7 +342,7 @@ describe('Charts Module - Time Filtering', () => {
       }
 
       // Simulate rapid filter switching (worst case)
-      const ranges = ['all', '5m', '10m', '30m', '1h', 'all', '5m', '10m', '30m', '1h'];
+      const ranges = ['all', '5h', '5m', '10m', '30m', '1h', 'all', '5m', '10m', '30m', '1h'];
       const startTime = performance.now();
       
       for (const range of ranges) {
