@@ -86,6 +86,61 @@ const Charts = (() => {
     return chart;
   }
 
+  function createMultiChart(canvasId, datasets, unit) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return null;
+
+    if (chartInstances[canvasId]) {
+      chartInstances[canvasId].destroy();
+    }
+
+    if (!chartData[canvasId]) {
+      chartData[canvasId] = [];
+    }
+
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: datasets.map(ds => ({
+          label: ds.label,
+          data: [],
+          borderColor: ds.color,
+          backgroundColor: ds.color + '18',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2
+        }))
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          ...commonOptions.scales,
+          x: { ...commonOptions.scales.x },
+          y: {
+            ...commonOptions.scales.y,
+            max: unit === '%' ? 100 : undefined,
+            ticks: {
+              ...commonOptions.scales.y.ticks,
+              callback: (v) => v + (unit || '')
+            }
+          }
+        },
+        plugins: {
+          ...commonOptions.plugins,
+          legend: {
+            display: true,
+            labels: { color: '#999', boxWidth: 10, boxHeight: 10 }
+          }
+        }
+      }
+    });
+
+    chartInstances[canvasId] = chart;
+    return chart;
+  }
+
   function updateChart(canvasId, metrics, valueKey) {
     const chart = chartInstances[canvasId];
     if (!chart) {
@@ -110,6 +165,29 @@ const Charts = (() => {
     chart.data.labels = filtered.map(m => formatTime(m.timestamp));
     chart.data.datasets[0].data = filtered.map(m => m.value);
     chart.update('none');
+  }
+
+  function updateMultiChart(canvasId, metrics, series) {
+    const chart = chartInstances[canvasId];
+    if (!chart) {
+      console.warn(`Chart ${canvasId} not found in updateMultiChart`);
+      return;
+    }
+
+    if (!Array.isArray(metrics)) {
+      console.warn(`Invalid metrics data for chart ${canvasId}: expected array`);
+      return;
+    }
+
+    chartData[canvasId] = metrics.map(m => ({
+      timestamp: m.timestamp,
+      values: series.map(s => {
+        const value = typeof s.value === 'function' ? s.value(m) : m[s.key];
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      })
+    }));
+
+    renderStoredChart(canvasId);
   }
 
   function appendPoint(canvasId, timestamp, value) {
@@ -162,6 +240,66 @@ const Charts = (() => {
     chart.update('none');
   }
 
+  function appendMultiPoint(canvasId, timestamp, values) {
+    const chart = chartInstances[canvasId];
+    if (!chart) return;
+
+    if (typeof timestamp !== 'number' || !Array.isArray(values)) {
+      return;
+    }
+
+    const normalized = values.map(value => (
+      typeof value === 'number' && Number.isFinite(value) ? value : null
+    ));
+    if (!normalized.some(value => value != null)) {
+      return;
+    }
+
+    if (!chartData[canvasId]) {
+      chartData[canvasId] = [];
+    }
+    chartData[canvasId].push({ timestamp, values: normalized });
+
+    if (currentTimeRange === 'all' && chartData[canvasId].length > 17280) {
+      chartData[canvasId].shift();
+    }
+
+    const startTime = calculateStartTimestamp(currentTimeRange);
+    if (currentTimeRange !== 'all' && timestamp < startTime) {
+      return;
+    }
+
+    if (currentTimeRange !== 'all') {
+      renderStoredChart(canvasId);
+    } else {
+      chart.data.labels.push(formatTime(timestamp));
+      chart.data.datasets.forEach((dataset, index) => {
+        dataset.data.push(normalized[index] ?? null);
+        if (dataset.data.length > 17280) dataset.data.shift();
+      });
+      if (chart.data.labels.length > 17280) chart.data.labels.shift();
+      chart.update('none');
+    }
+  }
+
+  function renderStoredChart(canvasId) {
+    const chart = chartInstances[canvasId];
+    if (!chart || !chartData[canvasId]) return;
+
+    const filtered = filterDataByRange(chartData[canvasId], currentTimeRange);
+    chart.data.labels = filtered.map(m => formatTime(m.timestamp));
+
+    if (filtered.length > 0 && Array.isArray(filtered[0].values)) {
+      chart.data.datasets.forEach((dataset, index) => {
+        dataset.data = filtered.map(m => m.values[index] ?? null);
+      });
+    } else if (chart.data.datasets[0]) {
+      chart.data.datasets[0].data = filtered.map(m => m.value);
+    }
+
+    chart.update('none');
+  }
+
   function calculateStartTimestamp(range) {
     if (range === 'all') {
       return 0;
@@ -204,10 +342,7 @@ const Charts = (() => {
       if (!chart) continue;
       if (!chartData[canvasId]) continue;
 
-      const filtered = filterDataByRange(chartData[canvasId], range);
-      chart.data.labels = filtered.map(m => formatTime(m.timestamp));
-      chart.data.datasets[0].data = filtered.map(m => m.value);
-      chart.update('none');
+      renderStoredChart(canvasId);
     }
   }
 
@@ -230,5 +365,5 @@ const Charts = (() => {
     }
   }
 
-  return { createChart, updateChart, appendPoint, destroyAll, setTimeRange, getCurrentTimeRange, hasChart };
+  return { createChart, createMultiChart, updateChart, updateMultiChart, appendPoint, appendMultiPoint, destroyAll, setTimeRange, getCurrentTimeRange, hasChart };
 })();

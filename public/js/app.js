@@ -427,7 +427,7 @@ const App = (() => {
           Charts.updateChart('chart-igpu', metrics, 'igpu_percent');
         }
         if (Charts.hasChart('chart-dgpu')) {
-          Charts.updateChart('chart-dgpu', metrics, 'dgpu_percent');
+          updateDgpuChart(metrics);
         }
 
         // Auto-detect GPUs from historical data if gpu_names not yet available
@@ -469,7 +469,10 @@ const App = (() => {
     container.appendChild(dgpuBox);
 
     Charts.createChart('chart-igpu', 'iGPU %', '#ff9100', '%');
-    Charts.createChart('chart-dgpu', 'dGPU %', '#e040fb', '%');
+    Charts.createMultiChart('chart-dgpu', [
+      { label: 'GPU0 %', color: '#e040fb' },
+      { label: 'GPU0 mem%', color: '#00e5ff' }
+    ], '%');
 
     igpuBox.style.display = 'none';
     dgpuBox.style.display = 'none';
@@ -486,8 +489,25 @@ const App = (() => {
     box.className = 'chart-box';
     box.id = canvasId + '-box';
     const title = fullName ? `${type} % — ${fullName}` : `${type} %`;
-    box.innerHTML = `<h3 style="color:${color}">${esc(title)}</h3><canvas id="${canvasId}"></canvas>`;
+    const displayTitle = type === 'dGPU'
+      ? (fullName ? `GPU0 % + GPU0 mem% - ${fullName}` : 'GPU0 % + GPU0 mem%')
+      : title;
+    box.innerHTML = `<h3 style="color:${color}">${esc(displayTitle)}</h3><canvas id="${canvasId}"></canvas>`;
     return box;
+  }
+
+  function getDgpuMemPercent(m) {
+    if (!m || m.dgpu_mem_used == null || m.dgpu_mem_total == null || m.dgpu_mem_total <= 0) {
+      return null;
+    }
+    return (m.dgpu_mem_used / m.dgpu_mem_total) * 100;
+  }
+
+  function updateDgpuChart(metrics) {
+    Charts.updateMultiChart('chart-dgpu', metrics, [
+      { key: 'dgpu_percent' },
+      { value: getDgpuMemPercent }
+    ]);
   }
 
   // Auto-detect GPU types from metric data when gpu_names is not yet available
@@ -495,7 +515,7 @@ const App = (() => {
     if (!metrics || metrics.length === 0) return;
 
     const hasIgpuData = metrics.some(m => m.igpu_percent != null);
-    const hasDgpuData = metrics.some(m => m.dgpu_percent != null);
+    const hasDgpuData = metrics.some(m => m.dgpu_percent != null || getDgpuMemPercent(m) != null);
 
     const igpuBox = document.getElementById('chart-igpu-box');
     const dgpuBox = document.getElementById('chart-dgpu-box');
@@ -882,7 +902,7 @@ const App = (() => {
               .then(r => r.json())
               .then(hist => {
                 if (Charts.hasChart('chart-igpu')) Charts.updateChart('chart-igpu', hist, 'igpu_percent');
-                if (Charts.hasChart('chart-dgpu')) Charts.updateChart('chart-dgpu', hist, 'dgpu_percent');
+                if (Charts.hasChart('chart-dgpu')) updateDgpuChart(hist);
               });
           }
         }
@@ -901,8 +921,8 @@ const App = (() => {
         if (metrics.igpu_percent != null) {
           Charts.appendPoint('chart-igpu', ts, metrics.igpu_percent);
         }
-        if (metrics.dgpu_percent != null) {
-          Charts.appendPoint('chart-dgpu', ts, metrics.dgpu_percent);
+        if (metrics.dgpu_percent != null || getDgpuMemPercent(metrics) != null) {
+          Charts.appendMultiPoint('chart-dgpu', ts, [metrics.dgpu_percent, getDgpuMemPercent(metrics)]);
         }
         // Update per-core bars
         if (metrics.cpu_cores && metrics.cpu_cores.length > 0) {
