@@ -31,22 +31,38 @@ function parseGpuNames(gpuNames) {
   return null;
 }
 
-function inferAccessModel(server) {
-  const gpuNames = parseGpuNames(server && server.gpu_names);
-  const combined = [gpuNames && gpuNames.igpu, gpuNames && gpuNames.dgpu]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  if (/\b1660\s*(s|super)?\b/.test(combined)) return 'gtx1660s';
-  if (/\b1030\b/.test(combined)) return 'gt1030';
+function inferAccessModelFromText(value) {
+  const text = String(value || '').toLowerCase();
+  if (!text) return null;
+  if (/\b1660\s*(s|super)?\b/.test(text) || /\b5\s*cam\b/.test(text)) return 'gtx1660s';
+  if (/\b1030\b/.test(text)) return 'gt1030';
   return null;
 }
 
-function getEffectiveAccessModel(server) {
-  const inferred = inferAccessModel(server);
+function inferAccessModel(server, metric) {
+  const serverGpuNames = parseGpuNames(server && server.gpu_names);
+  const metricGpuNames = parseGpuNames(metric && metric.gpu_names);
+  const combined = [
+    server && server.name,
+    serverGpuNames && serverGpuNames.igpu,
+    serverGpuNames && serverGpuNames.dgpu,
+    metricGpuNames && metricGpuNames.igpu,
+    metricGpuNames && metricGpuNames.dgpu,
+    metric && metric.gpu_check_message,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return inferAccessModelFromText(combined);
+}
+
+function getEffectiveAccessModel(server, metric) {
+  const configured = normalizeAccessModel(server && server.access_model);
+  if (configured === 'gtx1660s') return configured;
+
+  const inferred = inferAccessModel(server, metric);
   if (inferred) return inferred;
-  return normalizeAccessModel(server && server.access_model);
+  return configured;
 }
 
 function enrichServer(server) {
@@ -76,7 +92,7 @@ function parseCores(cpuCores) {
 }
 
 function calculateAccess(server, metric) {
-  const modelKey = getEffectiveAccessModel(server);
+  const modelKey = getEffectiveAccessModel(server, metric);
   const model = ACCESS_MODELS[modelKey];
 
   let activeDevices = 0;

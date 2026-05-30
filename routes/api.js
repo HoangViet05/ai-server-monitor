@@ -36,7 +36,7 @@ router.post('/servers', (req, res) => {
   }
 
   const server = db.addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, access_model });
-  res.status(201).json(server);
+  res.status(201).json(accessManager.enrichServer(server));
 });
 
 // Update server
@@ -53,7 +53,7 @@ router.put('/servers/:id', (req, res) => {
     fields.access_model = accessManager.normalizeAccessModel(fields.access_model);
   }
   const updated = db.updateServer(req.params.id, fields);
-  res.json(updated);
+  res.json(accessManager.enrichServer(updated));
 });
 
 // Delete server

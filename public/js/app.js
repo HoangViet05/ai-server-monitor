@@ -305,9 +305,10 @@ const App = (() => {
   function getServerAccessModel(server) {
     if (!server) return 'gt1030';
     if (server.access_model_effective) return server.access_model_effective;
+    if (server.access_model === 'gtx1660s') return 'gtx1660s';
     const gpuNames = getServerGpuNames(server.id);
-    const name = [gpuNames && gpuNames.igpu, gpuNames && gpuNames.dgpu].filter(Boolean).join(' ').toLowerCase();
-    if (/\b1660\s*(s|super)?\b/.test(name)) return 'gtx1660s';
+    const name = [server.name, gpuNames && gpuNames.igpu, gpuNames && gpuNames.dgpu].filter(Boolean).join(' ').toLowerCase();
+    if (/\b1660\s*(s|super)?\b/.test(name) || /\b5\s*cam\b/.test(name)) return 'gtx1660s';
     return server.access_model || 'gt1030';
   }
 
@@ -435,9 +436,10 @@ const App = (() => {
 
     // Load charts
     Charts.createChart('chart-cpu', 'CPU %', '#00e676', '%');
+    Charts.createChart('chart-temp', 'Temperature', '#ff9100', '\u00b0C');
     Charts.createChart('chart-ram', 'RAM', '#448aff', 'GB');
     Charts.createChart('chart-access', 'Access devices', '#00e5ff', '');
-    hideTempChart();
+    tempChartVisible = false;
     currentDetailMetrics = [];
 
     // Build dynamic GPU chart containers based on detected GPUs
@@ -460,11 +462,9 @@ const App = (() => {
       .then(metrics => {
         currentDetailMetrics = Array.isArray(metrics) ? metrics : [];
         Charts.updateChart('chart-cpu', metrics, 'cpu_percent');
+        Charts.updateChart('chart-temp', metrics, 'cpu_temp');
         Charts.updateChart('chart-ram', metrics, 'ram_used');
         Charts.updateChart('chart-access', metrics, 'access_active_devices');
-        if (tempChartVisible && Charts.hasChart('chart-temp')) {
-          Charts.updateChart('chart-temp', currentDetailMetrics, 'cpu_temp');
-        }
 
         // Update GPU charts if they exist
         if (Charts.hasChart('chart-igpu')) {
@@ -966,12 +966,12 @@ const App = (() => {
       if (serverId === selectedServerId) {
         const ts = Math.floor(Date.now() / 1000);
         Charts.appendPoint('chart-cpu', ts, metrics.cpu_percent);
+        Charts.appendPoint('chart-temp', ts, metrics.cpu_temp);
         Charts.appendPoint('chart-ram', ts, metrics.ram_used);
         Charts.appendPoint('chart-access', ts, metrics.access_active_devices);
         if (metrics.cpu_temp != null) {
           currentDetailMetrics.push({ timestamp: ts, cpu_temp: metrics.cpu_temp });
           if (currentDetailMetrics.length > 17280) currentDetailMetrics.shift();
-          Charts.appendPoint('chart-temp', ts, metrics.cpu_temp);
         }
         if (metrics.igpu_percent != null) {
           Charts.appendPoint('chart-igpu', ts, metrics.igpu_percent);
@@ -1096,8 +1096,8 @@ const App = (() => {
     document.getElementById('btn-pull-code').addEventListener('click', handlePullCode);
     document.getElementById('btn-pull-all').addEventListener('click', handlePullAll);
     document.getElementById('btn-close-pull-logs').addEventListener('click', closePullLogs);
-    document.getElementById('cpu-temp').addEventListener('click', toggleTempChart);
-    document.getElementById('btn-close-temp-chart').addEventListener('click', hideTempChart);
+    document.getElementById('cpu-temp')?.removeAttribute('title');
+    document.getElementById('btn-close-temp-chart')?.addEventListener('click', hideTempChart);
 
     document.getElementById('form-mode').addEventListener('change', (e) => {
       document.getElementById('ssh-fields').classList.toggle('hidden', e.target.value !== 'ssh');
@@ -1120,7 +1120,7 @@ const App = (() => {
       if (e.target.classList.contains('modal')) App.LogModal.close();
     });
 
-    document.getElementById('modal-temp-chart').addEventListener('click', (e) => {
+    document.getElementById('modal-temp-chart')?.addEventListener('click', (e) => {
       if (e.target.classList.contains('modal')) hideTempChart();
     });
 
