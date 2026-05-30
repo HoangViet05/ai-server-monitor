@@ -35,7 +35,7 @@
         <h3>CPU Cores</h3>
         <div class="cpu-header-right">
           <span id="cpu-overall" class="cpu-overall"></span>
-          <span id="cpu-temp" class="cpu-temp"></span>
+          <span id="cpu-temp" class="cpu-temp" role="button" title="Show temperature chart"></span>
         </div>
       </div>
       <div id="cpu-cores-grid" class="cpu-cores-grid"></div>
@@ -57,6 +57,10 @@
       <div class="chart-box">
         <h3>RAM</h3>
         <canvas id="chart-ram"></canvas>
+      </div>
+      <div id="chart-temp-box" class="chart-box hidden">
+        <h3>Temperature</h3>
+        <canvas id="chart-temp"></canvas>
       </div>
       <div id="gpu-charts-container"></div>
     </div>

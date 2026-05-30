@@ -7,6 +7,8 @@ const App = (() => {
   let sshTerm = null;
   let sshFitAddon = null;
   let sshSessionActive = false;
+  let currentDetailMetrics = [];
+  let tempChartVisible = false;
 
   // --- Init ---
   function init() {
@@ -392,6 +394,8 @@ const App = (() => {
     // Load charts
     Charts.createChart('chart-cpu', 'CPU %', '#00e676', '%');
     Charts.createChart('chart-ram', 'RAM', '#448aff', 'GB');
+    hideTempChart();
+    currentDetailMetrics = [];
 
     // Build dynamic GPU chart containers based on detected GPUs
     buildGpuCharts(server);
@@ -411,8 +415,12 @@ const App = (() => {
     fetch(`/api/servers/${serverId}/metrics?range=48`)
       .then(r => r.json())
       .then(metrics => {
+        currentDetailMetrics = Array.isArray(metrics) ? metrics : [];
         Charts.updateChart('chart-cpu', metrics, 'cpu_percent');
         Charts.updateChart('chart-ram', metrics, 'ram_used');
+        if (tempChartVisible && Charts.hasChart('chart-temp')) {
+          Charts.updateChart('chart-temp', currentDetailMetrics, 'cpu_temp');
+        }
 
         // Update GPU charts if they exist
         if (Charts.hasChart('chart-igpu')) {
@@ -529,6 +537,37 @@ const App = (() => {
         updateActiveFilter(range);
       });
     });
+  }
+
+  function showTempChart() {
+    const box = document.getElementById('chart-temp-box');
+    if (!box) return;
+    tempChartVisible = true;
+    box.classList.remove('hidden');
+    const tempEl = document.getElementById('cpu-temp');
+    tempEl?.classList.add('active');
+    if (tempEl) tempEl.title = 'Hide temperature chart';
+    if (!Charts.hasChart('chart-temp')) {
+      Charts.createChart('chart-temp', 'Temperature', '#ff9100', '\u00b0C');
+    }
+    Charts.updateChart('chart-temp', currentDetailMetrics, 'cpu_temp');
+  }
+
+  function hideTempChart() {
+    const box = document.getElementById('chart-temp-box');
+    tempChartVisible = false;
+    if (box) box.classList.add('hidden');
+    const tempEl = document.getElementById('cpu-temp');
+    tempEl?.classList.remove('active');
+    if (tempEl) tempEl.title = 'Show temperature chart';
+  }
+
+  function toggleTempChart() {
+    if (tempChartVisible) {
+      hideTempChart();
+    } else {
+      showTempChart();
+    }
   }
 
   function closeDetail() {
@@ -854,6 +893,11 @@ const App = (() => {
         const ts = Math.floor(Date.now() / 1000);
         Charts.appendPoint('chart-cpu', ts, metrics.cpu_percent);
         Charts.appendPoint('chart-ram', ts, metrics.ram_used);
+        if (metrics.cpu_temp != null) {
+          currentDetailMetrics.push({ timestamp: ts, cpu_temp: metrics.cpu_temp });
+          if (currentDetailMetrics.length > 17280) currentDetailMetrics.shift();
+          Charts.appendPoint('chart-temp', ts, metrics.cpu_temp);
+        }
         if (metrics.igpu_percent != null) {
           Charts.appendPoint('chart-igpu', ts, metrics.igpu_percent);
         }
@@ -976,6 +1020,7 @@ const App = (() => {
     document.getElementById('btn-pull-code').addEventListener('click', handlePullCode);
     document.getElementById('btn-pull-all').addEventListener('click', handlePullAll);
     document.getElementById('btn-close-pull-logs').addEventListener('click', closePullLogs);
+    document.getElementById('cpu-temp').addEventListener('click', toggleTempChart);
 
     document.getElementById('form-mode').addEventListener('change', (e) => {
       document.getElementById('ssh-fields').classList.toggle('hidden', e.target.value !== 'ssh');
@@ -1358,7 +1403,7 @@ const App = (() => {
     if (tempEl) {
       if (cpuTemp != null) {
         tempEl.textContent = cpuTemp + '°C';
-        tempEl.className = 'cpu-temp' + (cpuTemp >= 80 ? ' hot' : cpuTemp < 50 ? ' cool' : '');
+        tempEl.className = 'cpu-temp' + (cpuTemp >= 80 ? ' hot' : cpuTemp < 50 ? ' cool' : '') + (tempChartVisible ? ' active' : '');
       } else {
         tempEl.textContent = '';
       }

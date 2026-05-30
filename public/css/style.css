@@ -264,16 +264,31 @@ header h1 {
   background: rgba(255, 145, 0, 0.1);
   color: #ff9100;
   border: 1px solid rgba(255, 145, 0, 0.2);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+.cpu-temp:hover,
+.cpu-temp.active {
+  box-shadow: 0 0 12px rgba(255, 145, 0, 0.3);
 }
 .cpu-temp.hot {
   background: rgba(255, 23, 68, 0.1);
   color: #ff1744;
   border-color: rgba(255, 23, 68, 0.2);
 }
+.cpu-temp.hot:hover,
+.cpu-temp.hot.active {
+  box-shadow: 0 0 12px rgba(255, 23, 68, 0.3);
+}
 .cpu-temp.cool {
   background: rgba(0, 230, 118, 0.1);
   color: #00e676;
   border-color: rgba(0, 230, 118, 0.2);
+}
+.cpu-temp.cool:hover,
+.cpu-temp.cool.active {
+  box-shadow: 0 0 12px rgba(0, 230, 118, 0.3);
 }
 
 .cpu-cores-grid {
