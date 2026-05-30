@@ -19,7 +19,7 @@ function isValidIp(ip) {
 
 // List all servers
 router.get('/servers', (req, res) => {
-  const servers = db.getServers();
+  const servers = db.getServers().map(accessManager.enrichServer);
   res.json(servers);
 });
 

@@ -18,6 +18,49 @@ function normalizeAccessModel(value) {
   return ACCESS_MODELS[value] ? value : 'gt1030';
 }
 
+function parseGpuNames(gpuNames) {
+  if (!gpuNames) return null;
+  if (typeof gpuNames === 'object') return gpuNames;
+  if (typeof gpuNames === 'string') {
+    try {
+      return JSON.parse(gpuNames);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function inferAccessModel(server) {
+  const gpuNames = parseGpuNames(server && server.gpu_names);
+  const combined = [gpuNames && gpuNames.igpu, gpuNames && gpuNames.dgpu]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/\b1660\s*(s|super)?\b/.test(combined)) return 'gtx1660s';
+  if (/\b1030\b/.test(combined)) return 'gt1030';
+  return null;
+}
+
+function getEffectiveAccessModel(server) {
+  const inferred = inferAccessModel(server);
+  if (inferred) return inferred;
+  return normalizeAccessModel(server && server.access_model);
+}
+
+function enrichServer(server) {
+  if (!server) return server;
+  const modelKey = getEffectiveAccessModel(server);
+  const model = ACCESS_MODELS[modelKey];
+  return {
+    ...server,
+    access_model_effective: modelKey,
+    access_model_label: model.label,
+    access_capacity: model.capacity,
+  };
+}
+
 function parseCores(cpuCores) {
   if (!cpuCores) return [];
   if (Array.isArray(cpuCores)) return cpuCores;
@@ -33,7 +76,7 @@ function parseCores(cpuCores) {
 }
 
 function calculateAccess(server, metric) {
-  const modelKey = normalizeAccessModel(server && server.access_model);
+  const modelKey = getEffectiveAccessModel(server);
   const model = ACCESS_MODELS[modelKey];
 
   let activeDevices = 0;
@@ -78,6 +121,8 @@ function enrichMetrics(server, metrics) {
 module.exports = {
   ACCESS_MODELS,
   normalizeAccessModel,
+  getEffectiveAccessModel,
+  enrichServer,
   calculateAccess,
   enrichMetric,
   enrichMetrics,

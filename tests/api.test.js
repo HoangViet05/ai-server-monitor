@@ -39,11 +39,10 @@ after(() => {
 describe('POST /api/servers', () => {
   it('should add a server', async () => {
     const res = await request.post('/api/servers').send({
-      name: 'test-srv', ip: '100.64.0.1', mode: 'agent', access_model: 'gtx1660s'
+      name: 'test-srv', ip: '100.64.0.1', mode: 'agent'
     });
     assert.strictEqual(res.status, 201);
     assert.strictEqual(res.body.name, 'test-srv');
-    assert.strictEqual(res.body.access_model, 'gtx1660s');
     assert.ok(res.body.id);
   });
 
@@ -94,24 +93,15 @@ describe('DELETE /api/servers/:id', () => {
 describe('GET /api/servers/:id/metrics', () => {
   it('should return metrics', async () => {
     const addRes = await request.post('/api/servers').send({
-      name: 'metrics-srv', ip: '100.64.0.2', mode: 'agent', access_model: 'gtx1660s'
+      name: 'metrics-srv', ip: '100.64.0.2', mode: 'agent'
     });
     const id = addRes.body.id;
     const db = require('../db');
-    db.insertMetrics(id, {
-      cpu_percent: 50,
-      cpu_cores: [{ core: 0, percent: 25 }, { core: 1, percent: 35 }],
-      ram_total: 8e9,
-      ram_used: 4e9,
-      igpu_percent: null,
-      igpu_mem_used: null
-    });
+    db.insertMetrics(id, { cpu_percent: 50, ram_total: 8e9, ram_used: 4e9, igpu_percent: null, igpu_mem_used: null });
 
     const res = await request.get(`/api/servers/${id}/metrics?range=24`);
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.length, 1);
-    assert.strictEqual(res.body[0].access_active_devices, 1);
-    assert.strictEqual(res.body[0].access_capacity, 5);
   });
 });
 

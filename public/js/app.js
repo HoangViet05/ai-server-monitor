@@ -302,6 +302,19 @@ const App = (() => {
     return parts.join('\n');
   }
 
+  function getServerAccessModel(server) {
+    if (!server) return 'gt1030';
+    if (server.access_model_effective) return server.access_model_effective;
+    const gpuNames = getServerGpuNames(server.id);
+    const name = [gpuNames && gpuNames.igpu, gpuNames && gpuNames.dgpu].filter(Boolean).join(' ').toLowerCase();
+    if (/\b1660\s*(s|super)?\b/.test(name)) return 'gtx1660s';
+    return server.access_model || 'gt1030';
+  }
+
+  function getServerAccessLabel(server) {
+    return getServerAccessModel(server) === 'gtx1660s' ? 'GTX 1660S' : 'GT 1030';
+  }
+
   // Get gpu_names from cached server data
   function getServerGpuNames(serverId) {
     const server = servers.find(s => s.id === serverId);
@@ -398,7 +411,7 @@ const App = (() => {
 
     const accessBadge = document.getElementById('detail-access-status');
     if (accessBadge) {
-      accessBadge.textContent = `${server.access_model === 'gtx1660s' ? 'GTX 1660S' : 'GT 1030'} access: --`;
+      accessBadge.textContent = `${getServerAccessLabel(server)} access: --`;
       accessBadge.className = 'access-badge';
     }
 
@@ -423,6 +436,7 @@ const App = (() => {
     // Load charts
     Charts.createChart('chart-cpu', 'CPU %', '#00e676', '%');
     Charts.createChart('chart-ram', 'RAM', '#448aff', 'GB');
+    Charts.createChart('chart-access', 'Access devices', '#00e5ff', '');
     hideTempChart();
     currentDetailMetrics = [];
 
@@ -447,6 +461,7 @@ const App = (() => {
         currentDetailMetrics = Array.isArray(metrics) ? metrics : [];
         Charts.updateChart('chart-cpu', metrics, 'cpu_percent');
         Charts.updateChart('chart-ram', metrics, 'ram_used');
+        Charts.updateChart('chart-access', metrics, 'access_active_devices');
         if (tempChartVisible && Charts.hasChart('chart-temp')) {
           Charts.updateChart('chart-temp', currentDetailMetrics, 'cpu_temp');
         }
@@ -813,7 +828,7 @@ const App = (() => {
     document.getElementById('form-name').value = server.name;
     document.getElementById('form-ip').value = server.ip;
     document.getElementById('form-mode').value = server.mode;
-    document.getElementById('form-access-model').value = server.access_model || 'gt1030';
+    document.getElementById('form-access-model').value = getServerAccessModel(server);
     document.getElementById('form-ssh-user').value = server.ssh_user || '';
     document.getElementById('form-ssh-key').value = server.ssh_key_path || '';
     document.getElementById('form-ssh-password').value = '';
@@ -913,6 +928,12 @@ const App = (() => {
   function bindSocket() {
     socket.on('server:update', (data) => {
       const { serverId, metrics, pm2 } = data;
+      const server = servers.find(s => s.id === serverId);
+      if (server && metrics.access_model) {
+        server.access_model_effective = metrics.access_model;
+        server.access_model_label = metrics.access_model_label;
+        server.access_capacity = metrics.access_capacity;
+      }
 
       // Update card
       updateCardMetrics(serverId, metrics);
@@ -923,10 +944,10 @@ const App = (() => {
 
       // If gpu_names arrived, cache them on the server object and rebuild charts if needed
       if (metrics.gpu_names) {
-        const server = servers.find(s => s.id === serverId);
         if (server) {
           const prev = server.gpu_names;
           server.gpu_names = typeof metrics.gpu_names === 'string' ? metrics.gpu_names : JSON.stringify(metrics.gpu_names);
+          server.access_model_effective = metrics.access_model || getServerAccessModel(server);
           // Rebuild GPU charts if this is the first time we got GPU names for the open detail
           if (!prev && serverId === selectedServerId) {
             buildGpuCharts(server);
@@ -946,6 +967,7 @@ const App = (() => {
         const ts = Math.floor(Date.now() / 1000);
         Charts.appendPoint('chart-cpu', ts, metrics.cpu_percent);
         Charts.appendPoint('chart-ram', ts, metrics.ram_used);
+        Charts.appendPoint('chart-access', ts, metrics.access_active_devices);
         if (metrics.cpu_temp != null) {
           currentDetailMetrics.push({ timestamp: ts, cpu_temp: metrics.cpu_temp });
           if (currentDetailMetrics.length > 17280) currentDetailMetrics.shift();
