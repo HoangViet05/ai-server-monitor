@@ -85,6 +85,10 @@ const App = (() => {
             <div class="metric-label">GPU Pwr</div>
             <div class="metric-value" id="card-dgpupwr-${s.id}">--</div>
           </div>
+          <div class="metric">
+            <div class="metric-label">GPU Check</div>
+            <div class="metric-value gpu-check-value" id="card-gpucheck-${s.id}">--</div>
+          </div>
         </div>
         <div class="card-footer">
           <span>${s.status === 'offline' ? 'Last seen: ' + lastSeen : 'Mode: ' + s.mode}</span>
@@ -175,6 +179,7 @@ const App = (() => {
     const diskEl = document.getElementById(`card-disk-${serverId}`);
     const igpuEl = document.getElementById(`card-igpu-${serverId}`);
     const dgpuEl = document.getElementById(`card-dgpu-${serverId}`);
+    const gpuCheckEl = document.getElementById(`card-gpucheck-${serverId}`);
     if (cpuEl) cpuEl.textContent = m.cpu_percent != null ? m.cpu_percent.toFixed(1) + '%' : '--';
     if (ramEl) ramEl.textContent = m.ram_used != null ? (m.ram_used / 1073741824).toFixed(1) + '/' + (m.ram_total / 1073741824).toFixed(1) + ' GB' : '--';
     if (tempEl) {
@@ -210,6 +215,19 @@ const App = (() => {
         dgpuEl.textContent = m.dgpu_percent.toFixed(1) + '%';
         const wrap = document.getElementById(`card-dgpu-wrap-${serverId}`);
         if (wrap) wrap.style.display = '';
+      }
+    }
+    if (gpuCheckEl) {
+      if (m.gpu_check_available != null) {
+        const available = m.gpu_check_available === true || m.gpu_check_available === 1;
+        gpuCheckEl.textContent = available ? 'OK' : 'LOST';
+        gpuCheckEl.title = formatGpuCheckTitle(m);
+        gpuCheckEl.classList.toggle('gpu-check-ok', available);
+        gpuCheckEl.classList.toggle('gpu-check-lost', !available);
+      } else {
+        gpuCheckEl.textContent = '--';
+        gpuCheckEl.title = '';
+        gpuCheckEl.classList.remove('gpu-check-ok', 'gpu-check-lost');
       }
     }
     // Network
@@ -337,6 +355,13 @@ const App = (() => {
     }
 
     selectedServerId = serverId;
+  }
+
+  function formatGpuCheckTitle(m) {
+    const parts = [];
+    if (m.gpu_check_message) parts.push(m.gpu_check_message);
+    if (m.gpu_check_ts) parts.push('Checked: ' + new Date(m.gpu_check_ts * 1000).toLocaleString());
+    return parts.join('\n');
   }
 
   function updateDetailContent(server, serverId) {

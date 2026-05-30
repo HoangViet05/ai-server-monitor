@@ -190,6 +190,11 @@ function createTables() {
   // Migration — add power consumption columns to metrics (watts)
   try { db.exec('ALTER TABLE metrics ADD COLUMN cpu_watts REAL'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE metrics ADD COLUMN dgpu_watts REAL'); } catch { /* already exists */ }
+
+  // Migration - add GPU availability check columns
+  try { db.exec('ALTER TABLE metrics ADD COLUMN gpu_check_available INTEGER'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN gpu_check_message TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE metrics ADD COLUMN gpu_check_ts INTEGER'); } catch { /* already exists */ }
 }
 
 function prepareStatements() {
@@ -207,8 +212,8 @@ function prepareStatements() {
 
   // Metrics
   stmts.insertMetrics = db.prepare(`
-    INSERT INTO metrics (server_id, cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, dgpu_percent, dgpu_mem_used, dgpu_mem_total, disk_total, disk_used, net_rx_bytes, net_tx_bytes, cpu_watts, dgpu_watts, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO metrics (server_id, cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, dgpu_percent, dgpu_mem_used, dgpu_mem_total, disk_total, disk_used, net_rx_bytes, net_tx_bytes, cpu_watts, dgpu_watts, gpu_check_available, gpu_check_message, gpu_check_ts, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmts.rawInsertMetric = db.prepare(`
     INSERT INTO metrics (server_id, cpu_percent, ram_total, ram_used, igpu_percent, igpu_mem_used, timestamp)
@@ -401,7 +406,29 @@ function updateGpuNames(serverId, gpuNamesJson) {
 function insertMetrics(serverId, m) {
   const now = Math.floor(Date.now() / 1000);
   const cpuCoresJson = m.cpu_cores ? JSON.stringify(m.cpu_cores) : null;
-  stmts.insertMetrics.run(serverId, m.cpu_percent, cpuCoresJson, m.cpu_temp ?? null, m.ram_total, m.ram_used, m.igpu_percent ?? null, m.igpu_mem_used ?? null, m.dgpu_percent ?? null, m.dgpu_mem_used ?? null, m.dgpu_mem_total ?? null, m.disk_total ?? null, m.disk_used ?? null, m.net_rx_bytes ?? null, m.net_tx_bytes ?? null, m.cpu_watts ?? null, m.dgpu_watts ?? null, now);
+  stmts.insertMetrics.run(
+    serverId,
+    m.cpu_percent,
+    cpuCoresJson,
+    m.cpu_temp ?? null,
+    m.ram_total,
+    m.ram_used,
+    m.igpu_percent ?? null,
+    m.igpu_mem_used ?? null,
+    m.dgpu_percent ?? null,
+    m.dgpu_mem_used ?? null,
+    m.dgpu_mem_total ?? null,
+    m.disk_total ?? null,
+    m.disk_used ?? null,
+    m.net_rx_bytes ?? null,
+    m.net_tx_bytes ?? null,
+    m.cpu_watts ?? null,
+    m.dgpu_watts ?? null,
+    m.gpu_check_available == null ? null : (m.gpu_check_available ? 1 : 0),
+    m.gpu_check_message ?? null,
+    m.gpu_check_ts ?? null,
+    now
+  );
 }
 
 function _rawInsertMetric(serverId, cpu, ramTotal, ramUsed, igpu, igpuMem, timestamp) {

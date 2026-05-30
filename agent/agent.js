@@ -12,6 +12,9 @@ const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const DASHBOARD_URL = config.dashboard_url;
 const INTERVAL = config.interval || 10000;
 const SERVER_NAME = config.server_name || os.hostname();
+const GPU_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+let lastGpuCheckAt = 0;
+let lastGpuCheck = null;
 
 console.log(`[Agent] Connecting to ${DASHBOARD_URL}...`);
 
@@ -158,6 +161,25 @@ function getIgpuInfo() {
   } catch {
     return { igpu_percent: null, igpu_mem_used: null };
   }
+}
+
+function getGpuCheck() {
+  const now = Date.now();
+  if (lastGpuCheck && now - lastGpuCheckAt < GPU_CHECK_INTERVAL_MS) {
+    return lastGpuCheck;
+  }
+
+  const ts = Math.floor(now / 1000);
+  try {
+    const output = execSync('timeout 5 nvidia-smi -L 2>/dev/null', { encoding: 'utf8' }).trim();
+    lastGpuCheck = output
+      ? { gpu_check_available: true, gpu_check_message: output.split('\n')[0].trim(), gpu_check_ts: ts }
+      : { gpu_check_available: false, gpu_check_message: 'nvidia-smi returned no GPUs', gpu_check_ts: ts };
+  } catch {
+    lastGpuCheck = { gpu_check_available: false, gpu_check_message: 'nvidia-smi not found or failed', gpu_check_ts: ts };
+  }
+  lastGpuCheckAt = now;
+  return lastGpuCheck;
 }
 
 // PM2 logs
@@ -319,10 +341,11 @@ setInterval(() => {
   const cpu_temp = getCpuTemp();
   const { ram_total, ram_used } = getRamInfo();
   const { igpu_percent, igpu_mem_used } = getIgpuInfo();
+  const gpuCheck = getGpuCheck();
   const pm2 = getPm2Apps();
 
   socket.emit('heartbeat', {
-    metrics: { cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used },
+    metrics: { cpu_percent, cpu_cores, cpu_temp, ram_total, ram_used, igpu_percent, igpu_mem_used, ...gpuCheck },
     pm2
   });
 

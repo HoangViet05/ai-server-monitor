@@ -6,6 +6,7 @@ const prevCpuData = new Map(); // serverId -> { cpu: {idle,total}, cores: { cpu0
 const activeStreams = new Map(); // serverId -> true
 const lastLogLines = new Map(); // serverId:appName -> last line message (dedup)
 const gpuNamesCache = new Map(); // serverId -> { igpu: "...", dgpu: "..." }
+const gpuCheckCache = new Map(); // serverId -> { available: boolean, message: string, ts: number }
 let browserIo = null;
 
 function init(_browserIo) {
@@ -23,6 +24,7 @@ function stopPolling(serverId) {
   activeStreams.delete(serverId);
   prevCpuData.delete(serverId);
   gpuNamesCache.delete(serverId);
+  gpuCheckCache.delete(serverId);
   // Clean up lastLogLines entries for this server
   for (const key of lastLogLines.keys()) {
     if (key.startsWith(serverId + ':')) {
@@ -162,8 +164,30 @@ function buildStreamScript() {
     '    echo "===GPUNAMES==="',
     '    echo "igpu:$IGPU_NAME"',
     '    echo "dgpu:$DGPU_NAME"',
-    // PM2 process list -- every 3rd tick (6s)
     '    C=$((C+1))',
+    // GPU availability check -- every 150 ticks (~5 minutes), plus first tick
+    '    if [ "$C" -eq 1 ] || [ $((C % 150)) -eq 0 ]; then',
+    '      echo "===GPUCHECK==="',
+    '      TS=$(date +%s)',
+    '      if command -v nvidia-smi >/dev/null 2>&1; then',
+    '        GPU_LIST=$(nvidia-smi -L 2>/dev/null)',
+    '        if [ -n "$GPU_LIST" ]; then',
+    '          FIRST_GPU=$(printf "%s\\n" "$GPU_LIST" | head -1)',
+    '          echo "available:1"',
+    '          echo "ts:$TS"',
+    '          echo "message:$FIRST_GPU"',
+    '        else',
+    '          echo "available:0"',
+    '          echo "ts:$TS"',
+    '          echo "message:nvidia-smi returned no GPUs"',
+    '        fi',
+    '      else',
+    '        echo "available:0"',
+    '        echo "ts:$TS"',
+    '        echo "message:nvidia-smi not found"',
+    '      fi',
+    '    fi',
+    // PM2 process list -- every 3rd tick (6s)
     '    if [ $((C % 3)) -eq 0 ]; then',
     '      echo "===PM2==="',
     // Resolve pm2 binary: check common locations for nvm/npm global installs
@@ -387,6 +411,18 @@ function processTick(serverId, tickData) {
     metrics.gpu_names = cachedNames;
   }
 
+  if (sections.GPUCHECK) {
+    const check = parseGpuCheck(sections.GPUCHECK);
+    if (check) gpuCheckCache.set(serverId, check);
+  }
+
+  const cachedGpuCheck = gpuCheckCache.get(serverId);
+  if (cachedGpuCheck) {
+    metrics.gpu_check_available = cachedGpuCheck.available;
+    metrics.gpu_check_message = cachedGpuCheck.message;
+    metrics.gpu_check_ts = cachedGpuCheck.ts;
+  }
+
   // Parse PM2 processes
   let pm2Apps = null; // null means "no data available yet"
   if (sections.PM2) {
@@ -502,7 +538,7 @@ function handleStreamEnd(server, err) {
 /* ─── Parsers ─── */
 
 function parseSysOutput(serverId, output) {
-  const metrics = { cpu_percent: 0, cpu_cores: [], cpu_temp: null, ram_total: 0, ram_used: 0, igpu_percent: null, igpu_mem_used: null, dgpu_percent: null, dgpu_mem_used: null, dgpu_mem_total: null, disk_total: null, disk_used: null };
+  const metrics = { cpu_percent: 0, cpu_cores: [], cpu_temp: null, ram_total: 0, ram_used: 0, igpu_percent: null, igpu_mem_used: null, dgpu_percent: null, dgpu_mem_used: null, dgpu_mem_total: null, disk_total: null, disk_used: null, gpu_check_available: null, gpu_check_message: null, gpu_check_ts: null };
 
   const sections = output.split('===MEMINFO===');
   const statSection = sections[0] || '';
@@ -708,6 +744,21 @@ function parseGpuNames(output) {
     }
   }
   return names;
+}
+
+function parseGpuCheck(output) {
+  const result = { available: false, message: '', ts: Math.floor(Date.now() / 1000) };
+  for (const line of output.split('\n')) {
+    if (line.startsWith('available:')) {
+      result.available = line.substring(10).trim() === '1';
+    } else if (line.startsWith('message:')) {
+      result.message = line.substring(8).trim();
+    } else if (line.startsWith('ts:')) {
+      const ts = parseInt(line.substring(3).trim(), 10);
+      if (!isNaN(ts)) result.ts = ts;
+    }
+  }
+  return result;
 }
 
 // Parse POWER section: CPU RAPL delta (two snapshots separated by ---POWER_SNAP---) + GPU watts
