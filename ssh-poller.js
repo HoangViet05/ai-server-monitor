@@ -492,11 +492,15 @@ function processTick(serverId, tickData) {
   // Save to DB
   db.updateServerStatus(serverId, 'online');
   db.insertMetrics(serverId, metrics);
+  const serverForAccess = db.getServer(serverId);
+  const enrichedMetrics = accessManager.enrichMetric(serverForAccess, metrics);
+  const accessDaily = db.recordAccessSample(serverId, enrichedMetrics.access_active_devices);
+  enrichedMetrics.access_daily_delta = accessDaily.delta;
+  enrichedMetrics.access_daily_day = accessDaily.day;
 
   // Notify browser
   if (browserIo) {
-    const server = db.getServer(serverId);
-    browserIo.emit('server:update', { serverId, metrics: accessManager.enrichMetric(server, metrics), pm2: pm2Apps });
+    browserIo.emit('server:update', { serverId, metrics: enrichedMetrics, pm2: pm2Apps });
     browserIo.emit('server:status', { serverId, status: 'online', lastSeen: Math.floor(Date.now() / 1000) });
   }
 

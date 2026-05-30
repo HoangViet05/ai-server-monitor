@@ -48,14 +48,18 @@ function createAgentServer(httpServer, _browserIo) {
 
       db.updateServerStatus(serverId, 'online');
       db.insertMetrics(serverId, metrics);
+      const server = db.getServer(serverId);
+      const enrichedMetrics = accessManager.enrichMetric(server, metrics);
+      const accessDaily = db.recordAccessSample(serverId, enrichedMetrics.access_active_devices);
+      enrichedMetrics.access_daily_delta = accessDaily.delta;
+      enrichedMetrics.access_daily_day = accessDaily.day;
 
       if (pm2 && Array.isArray(pm2)) {
         db.upsertPm2Apps(serverId, pm2);
       }
 
       if (browserIo) {
-        const server = db.getServer(serverId);
-        browserIo.emit('server:update', { serverId, metrics: accessManager.enrichMetric(server, metrics), pm2 });
+        browserIo.emit('server:update', { serverId, metrics: enrichedMetrics, pm2 });
       }
     });
 

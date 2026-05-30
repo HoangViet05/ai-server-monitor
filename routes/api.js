@@ -75,6 +75,14 @@ router.get('/servers/:id/metrics', (req, res) => {
   res.json(metrics);
 });
 
+// Get daily access totals. This chart intentionally has its own 7-day window.
+router.get('/servers/:id/access-daily', (req, res) => {
+  const server = db.getServer(req.params.id);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  res.json(db.getAccessDaily(req.params.id, req.query.days || 7));
+});
+
 // Get PM2 apps
 router.get('/servers/:id/pm2', (req, res) => {
   const server = db.getServer(req.params.id);

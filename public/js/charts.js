@@ -1,6 +1,7 @@
 const Charts = (() => {
   const chartInstances = {};
   const chartData = {};
+  const chartMeta = {};
   let currentTimeRange = '5h';
   const TIME_RANGE_SECONDS = {
     '5m': 300,
@@ -35,6 +36,12 @@ const Charts = (() => {
   function formatTime(ts) {
     const d = new Date(ts * 1000);
     return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+  }
+
+  function formatDay(day) {
+    const parts = String(day || '').split('-');
+    if (parts.length === 3) return `${parts[2]}/${parts[1]}`;
+    return day || '';
   }
 
   function createChart(canvasId, label, color, unit) {
@@ -83,6 +90,7 @@ const Charts = (() => {
     });
 
     chartInstances[canvasId] = chart;
+    chartMeta[canvasId] = { ignoreTimeFilter: false };
     return chart;
   }
 
@@ -138,7 +146,65 @@ const Charts = (() => {
     });
 
     chartInstances[canvasId] = chart;
+    chartMeta[canvasId] = { ignoreTimeFilter: false };
     return chart;
+  }
+
+  function createBarChart(canvasId, label, color, unit, options = {}) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return null;
+
+    if (chartInstances[canvasId]) {
+      chartInstances[canvasId].destroy();
+    }
+
+    const chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label,
+          data: [],
+          backgroundColor: color + '66',
+          borderColor: color,
+          borderWidth: 1,
+          borderRadius: 4,
+          maxBarThickness: 42
+        }]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          ...commonOptions.scales,
+          x: { ...commonOptions.scales.x },
+          y: {
+            ...commonOptions.scales.y,
+            ticks: {
+              ...commonOptions.scales.y.ticks,
+              precision: 0,
+              callback: (v) => `${v}${unit || ''}`
+            }
+          }
+        }
+      }
+    });
+
+    chartInstances[canvasId] = chart;
+    chartMeta[canvasId] = { ignoreTimeFilter: !!options.ignoreTimeFilter };
+    return chart;
+  }
+
+  function updateBarChart(canvasId, rows, labelKey, valueKey) {
+    const chart = chartInstances[canvasId];
+    if (!chart) return;
+    if (!Array.isArray(rows)) return;
+
+    chart.data.labels = rows.map(row => formatDay(row[labelKey || 'day']));
+    chart.data.datasets[0].data = rows.map(row => {
+      const value = row[valueKey || 'count'];
+      return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    });
+    chart.update('none');
   }
 
   function updateChart(canvasId, metrics, valueKey) {
@@ -340,6 +406,7 @@ const Charts = (() => {
     for (const canvasId of Object.keys(chartInstances)) {
       const chart = chartInstances[canvasId];
       if (!chart) continue;
+      if (chartMeta[canvasId] && chartMeta[canvasId].ignoreTimeFilter) continue;
       if (!chartData[canvasId]) continue;
 
       renderStoredChart(canvasId);
@@ -363,7 +430,10 @@ const Charts = (() => {
     for (const key of Object.keys(chartData)) {
       delete chartData[key];
     }
+    for (const key of Object.keys(chartMeta)) {
+      delete chartMeta[key];
+    }
   }
 
-  return { createChart, createMultiChart, updateChart, updateMultiChart, appendPoint, appendMultiPoint, destroyAll, setTimeRange, getCurrentTimeRange, hasChart };
+  return { createChart, createMultiChart, createBarChart, updateChart, updateMultiChart, updateBarChart, appendPoint, appendMultiPoint, destroyAll, setTimeRange, getCurrentTimeRange, hasChart };
 })();
