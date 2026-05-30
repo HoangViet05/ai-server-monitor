@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const db = require('./db');
 const healthService = require('./health-service');
+const accessManager = require('./access-manager');
 
 let browserIo = null;
 let agentIo = null;
@@ -53,7 +54,8 @@ function createAgentServer(httpServer, _browserIo) {
       }
 
       if (browserIo) {
-        browserIo.emit('server:update', { serverId, metrics, pm2 });
+        const server = db.getServer(serverId);
+        browserIo.emit('server:update', { serverId, metrics: accessManager.enrichMetric(server, metrics), pm2 });
       }
     });
 

@@ -29,6 +29,7 @@ function createTables() {
       ssh_key_path TEXT,
       ssh_password TEXT,
       git_repo_path TEXT,
+      access_model TEXT NOT NULL DEFAULT 'gt1030',
       status TEXT NOT NULL DEFAULT 'offline',
       last_seen INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL
@@ -170,6 +171,7 @@ function createTables() {
 
   // Migration — add git_repo_path column
   try { db.exec('ALTER TABLE servers ADD COLUMN git_repo_path TEXT'); } catch { /* already exists */ }
+  try { db.exec("ALTER TABLE servers ADD COLUMN access_model TEXT NOT NULL DEFAULT 'gt1030'"); } catch { /* already exists */ }
 
   // Migration — add discrete GPU columns to metrics
   try { db.exec('ALTER TABLE metrics ADD COLUMN dgpu_percent REAL'); } catch { /* already exists */ }
@@ -200,8 +202,8 @@ function createTables() {
 function prepareStatements() {
   // Servers
   stmts.addServer = db.prepare(`
-    INSERT INTO servers (id, name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, status, last_seen, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offline', 0, ?)
+    INSERT INTO servers (id, name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, access_model, status, last_seen, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'offline', 0, ?)
   `);
   stmts.getServer = db.prepare('SELECT * FROM servers WHERE id = ?');
   stmts.getServers = db.prepare('SELECT * FROM servers ORDER BY created_at ASC');
@@ -353,10 +355,10 @@ function close() {
 
 // --- Servers ---
 
-function addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path }) {
+function addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, access_model }) {
   const id = uuidv4();
   const now = Math.floor(Date.now() / 1000);
-  stmts.addServer.run(id, name, ip, mode || 'agent', ssh_user || null, ssh_key_path || null, ssh_password || null, git_repo_path || null, now);
+  stmts.addServer.run(id, name, ip, mode || 'agent', ssh_user || null, ssh_key_path || null, ssh_password || null, git_repo_path || null, access_model || 'gt1030', now);
   return getServer(id);
 }
 
@@ -369,7 +371,7 @@ function getServers() {
 }
 
 function updateServer(id, fields) {
-  const allowed = ['name', 'ip', 'mode', 'ssh_user', 'ssh_key_path', 'ssh_password', 'git_repo_path'];
+  const allowed = ['name', 'ip', 'mode', 'ssh_user', 'ssh_key_path', 'ssh_password', 'git_repo_path', 'access_model'];
   const updates = [];
   const values = [];
   for (const key of allowed) {

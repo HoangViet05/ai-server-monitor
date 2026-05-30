@@ -24,6 +24,7 @@ describe('servers', () => {
     assert.ok(server.id);
     assert.strictEqual(server.name, 'test-server');
     assert.strictEqual(server.status, 'offline');
+    assert.strictEqual(server.access_model, 'gt1030');
 
     const list = db.getServers();
     assert.strictEqual(list.length, 1);
@@ -35,6 +36,13 @@ describe('servers', () => {
     const id = servers[0].id;
     const updated = db.updateServer(id, { name: 'renamed-server' });
     assert.strictEqual(updated.name, 'renamed-server');
+  });
+
+  it('should update access model', () => {
+    const servers = db.getServers();
+    const id = servers[0].id;
+    const updated = db.updateServer(id, { access_model: 'gtx1660s' });
+    assert.strictEqual(updated.access_model, 'gtx1660s');
   });
 
   it('should update server status', () => {

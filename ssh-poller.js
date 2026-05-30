@@ -1,5 +1,6 @@
 ﻿const { NodeSSH } = require('node-ssh');
 const db = require('./db');
+const accessManager = require('./access-manager');
 
 const connections = new Map(); // serverId -> { ssh, failCount }
 const prevCpuData = new Map(); // serverId -> { cpu: {idle,total}, cores: { cpu0: {idle,total}, ... } }
@@ -494,7 +495,8 @@ function processTick(serverId, tickData) {
 
   // Notify browser
   if (browserIo) {
-    browserIo.emit('server:update', { serverId, metrics, pm2: pm2Apps });
+    const server = db.getServer(serverId);
+    browserIo.emit('server:update', { serverId, metrics: accessManager.enrichMetric(server, metrics), pm2: pm2Apps });
     browserIo.emit('server:status', { serverId, status: 'online', lastSeen: Math.floor(Date.now() / 1000) });
   }
 

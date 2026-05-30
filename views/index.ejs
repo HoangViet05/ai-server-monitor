@@ -23,6 +23,7 @@
     <div class="detail-header">
       <h2 id="detail-server-name"></h2>
       <span id="detail-server-status" class="status-badge"></span>
+      <span id="detail-access-status" class="access-badge"></span>
       <button id="btn-ssh" class="btn btn-sm btn-ssh hidden">SSH</button>
       <button id="btn-pull-code" class="btn btn-sm btn-pull hidden">Pull Code</button>
       <button id="btn-close-detail" class="btn btn-sm">Close</button>
@@ -104,6 +105,11 @@
         <select id="form-mode">
           <option value="agent">Agent</option>
           <option value="ssh">SSH</option>
+        </select>
+        <label>Access Model</label>
+        <select id="form-access-model">
+          <option value="gt1030">GT 1030 - 1 device by CPU activity</option>
+          <option value="gtx1660s">GTX 1660S - 5 devices by active cores</option>
         </select>
         <div id="ssh-fields" class="hidden">
           <label>SSH User</label>

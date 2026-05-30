@@ -52,6 +52,10 @@ const App = (() => {
             <div class="metric-value" id="card-cpu-${s.id}">--</div>
           </div>
           <div class="metric">
+            <div class="metric-label">Access</div>
+            <div class="metric-value access-value" id="card-access-${s.id}">--</div>
+          </div>
+          <div class="metric">
             <div class="metric-label">RAM</div>
             <div class="metric-value" id="card-ram-${s.id}">--</div>
           </div>
@@ -176,6 +180,7 @@ const App = (() => {
 
   function updateCardMetrics(serverId, m) {
     const cpuEl = document.getElementById(`card-cpu-${serverId}`);
+    const accessEl = document.getElementById(`card-access-${serverId}`);
     const ramEl = document.getElementById(`card-ram-${serverId}`);
     const tempEl = document.getElementById(`card-temp-${serverId}`);
     const diskEl = document.getElementById(`card-disk-${serverId}`);
@@ -183,6 +188,12 @@ const App = (() => {
     const dgpuEl = document.getElementById(`card-dgpu-${serverId}`);
     const gpuCheckEl = document.getElementById(`card-gpucheck-${serverId}`);
     if (cpuEl) cpuEl.textContent = m.cpu_percent != null ? m.cpu_percent.toFixed(1) + '%' : '--';
+    if (accessEl) {
+      accessEl.textContent = formatAccessValue(m);
+      accessEl.classList.toggle('access-active', (m.access_active_devices || 0) > 0);
+      accessEl.classList.toggle('access-full', m.access_capacity != null && m.access_active_devices >= m.access_capacity);
+      accessEl.title = formatAccessTitle(m);
+    }
     if (ramEl) ramEl.textContent = m.ram_used != null ? (m.ram_used / 1073741824).toFixed(1) + '/' + (m.ram_total / 1073741824).toFixed(1) + ' GB' : '--';
     if (tempEl) {
       const temp = m.cpu_temp;
@@ -279,6 +290,18 @@ const App = (() => {
     }
   }
 
+  function formatAccessValue(m) {
+    if (!m || m.access_active_devices == null || m.access_capacity == null) return '--';
+    return `${m.access_active_devices}/${m.access_capacity}`;
+  }
+
+  function formatAccessTitle(m) {
+    if (!m || m.access_active_devices == null) return '';
+    const parts = [`${m.access_model_label || 'Access'}: ${m.access_active_devices}/${m.access_capacity} devices`];
+    if (m.access_active_cores != null) parts.push(`Active cores: ${m.access_active_cores}`);
+    return parts.join('\n');
+  }
+
   // Get gpu_names from cached server data
   function getServerGpuNames(serverId) {
     const server = servers.find(s => s.id === serverId);
@@ -373,6 +396,12 @@ const App = (() => {
     badge.textContent = server.status;
     badge.className = `status-badge ${server.status}`;
 
+    const accessBadge = document.getElementById('detail-access-status');
+    if (accessBadge) {
+      accessBadge.textContent = `${server.access_model === 'gtx1660s' ? 'GTX 1660S' : 'GT 1030'} access: --`;
+      accessBadge.className = 'access-badge';
+    }
+
     // Show/hide SSH button for SSH-mode servers
     const sshBtn = document.getElementById('btn-ssh');
     if (server.mode === 'ssh') {
@@ -442,6 +471,7 @@ const App = (() => {
           if (typeof cores === 'string') cores = JSON.parse(cores);
           if (cores && cores.length > 0) renderCores(cores);
           updateCpuHeader(latest.cpu_percent, latest.cpu_temp);
+          updateAccessBadge(latest);
         }
       });
 
@@ -765,6 +795,7 @@ const App = (() => {
     document.getElementById('form-name').value = '';
     document.getElementById('form-ip').value = '';
     document.getElementById('form-mode').value = 'agent';
+    document.getElementById('form-access-model').value = 'gt1030';
     document.getElementById('form-ssh-user').value = '';
     document.getElementById('form-ssh-key').value = '';
     document.getElementById('form-ssh-password').value = '';
@@ -782,6 +813,7 @@ const App = (() => {
     document.getElementById('form-name').value = server.name;
     document.getElementById('form-ip').value = server.ip;
     document.getElementById('form-mode').value = server.mode;
+    document.getElementById('form-access-model').value = server.access_model || 'gt1030';
     document.getElementById('form-ssh-user').value = server.ssh_user || '';
     document.getElementById('form-ssh-key').value = server.ssh_key_path || '';
     document.getElementById('form-ssh-password').value = '';
@@ -813,6 +845,7 @@ const App = (() => {
       name: document.getElementById('form-name').value,
       ip: document.getElementById('form-ip').value,
       mode: document.getElementById('form-mode').value,
+      access_model: document.getElementById('form-access-model').value,
       ssh_user: document.getElementById('form-ssh-user').value || null,
       ssh_key_path: document.getElementById('form-ssh-key').value || null,
       ssh_password: document.getElementById('form-ssh-password').value || null,
@@ -929,6 +962,7 @@ const App = (() => {
           renderCores(metrics.cpu_cores);
         }
         updateCpuHeader(metrics.cpu_percent, metrics.cpu_temp);
+        updateAccessBadge(metrics);
         if (pm2 != null) renderPm2Table(serverId, pm2);
       }
     });
@@ -1437,6 +1471,20 @@ const App = (() => {
         tempEl.textContent = '';
       }
     }
+  }
+
+  function updateAccessBadge(m) {
+    const el = document.getElementById('detail-access-status');
+    if (!el) return;
+    if (!m || m.access_active_devices == null || m.access_capacity == null) {
+      el.textContent = 'Access: --';
+      el.className = 'access-badge';
+      el.title = '';
+      return;
+    }
+    el.textContent = `${m.access_model_label || 'Access'}: ${m.access_active_devices}/${m.access_capacity}`;
+    el.className = 'access-badge' + ((m.access_active_devices || 0) > 0 ? ' active' : '') + (m.access_active_devices >= m.access_capacity ? ' full' : '');
+    el.title = formatAccessTitle(m);
   }
 
   // --- Helpers ---

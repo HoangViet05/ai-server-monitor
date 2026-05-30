@@ -6,6 +6,7 @@ const pm2Ops = require('../pm2-operations');
 const sshPoller = require('../ssh-poller');
 const scoreboardMgr = require('../scoreboard-manager');
 const { findAgentSocket } = require('../agent-utils');
+const accessManager = require('../access-manager');
 
 function isValidIp(ip) {
   const parts = ip.split('.');
@@ -25,6 +26,7 @@ router.get('/servers', (req, res) => {
 // Add server
 router.post('/servers', (req, res) => {
   const { name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path } = req.body;
+  const access_model = accessManager.normalizeAccessModel(req.body.access_model);
 
   if (!name || !ip) {
     return res.status(400).json({ error: 'name and ip are required' });
@@ -33,7 +35,7 @@ router.post('/servers', (req, res) => {
     return res.status(400).json({ error: 'Invalid IP address' });
   }
 
-  const server = db.addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path });
+  const server = db.addServer({ name, ip, mode, ssh_user, ssh_key_path, ssh_password, git_repo_path, access_model });
   res.status(201).json(server);
 });
 
@@ -46,7 +48,11 @@ router.put('/servers/:id', (req, res) => {
     return res.status(400).json({ error: 'Invalid IP address' });
   }
 
-  const updated = db.updateServer(req.params.id, req.body);
+  const fields = { ...req.body };
+  if (fields.access_model !== undefined) {
+    fields.access_model = accessManager.normalizeAccessModel(fields.access_model);
+  }
+  const updated = db.updateServer(req.params.id, fields);
   res.json(updated);
 });
 
@@ -65,7 +71,7 @@ router.get('/servers/:id/metrics', (req, res) => {
   if (!server) return res.status(404).json({ error: 'Server not found' });
 
   const range = parseInt(req.query.range) || 48;
-  const metrics = db.getMetrics(req.params.id, range);
+  const metrics = accessManager.enrichMetrics(server, db.getMetrics(req.params.id, range));
   res.json(metrics);
 });
 
