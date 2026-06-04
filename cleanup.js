@@ -15,7 +15,6 @@ function start() {
 function run() {
   try {
     db.cleanupOldMetrics();
-    db.cleanupOldAccessDaily();
     db.cleanupExcessLogs();
     db.cleanupOldGitPulls();
     db.cleanupOldHealthEvents();

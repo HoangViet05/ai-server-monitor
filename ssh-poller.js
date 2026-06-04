@@ -494,9 +494,6 @@ function processTick(serverId, tickData) {
   db.insertMetrics(serverId, metrics);
   const serverForAccess = db.getServer(serverId);
   const enrichedMetrics = accessManager.enrichMetric(serverForAccess, metrics);
-  const accessDaily = db.recordAccessSample(serverId, enrichedMetrics.access_active_devices);
-  enrichedMetrics.access_daily_delta = accessDaily.delta;
-  enrichedMetrics.access_daily_day = accessDaily.day;
 
   // Notify browser
   if (browserIo) {

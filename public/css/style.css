@@ -432,8 +432,6 @@ header h1 {
 .charts-container .chart-box-cpu h3 { color: #00e676; }
 .charts-container .chart-box-temp h3 { color: #ff9100; }
 .charts-container .chart-box-ram h3 { color: #448aff; }
-.charts-container .chart-box-access h3 { color: #00e5ff; }
-.charts-container .chart-box-access-daily h3 { color: #ffd740; }
 .modal-chart {
   max-width: 860px;
 }

@@ -164,23 +164,6 @@ function createTables() {
     CREATE INDEX IF NOT EXISTS idx_incidents_open ON incidents(server_id, closed_at);
     CREATE INDEX IF NOT EXISTS idx_incidents_server_opened ON incidents(server_id, opened_at DESC);
 
-    CREATE TABLE IF NOT EXISTS access_daily_counts (
-      server_id TEXT NOT NULL,
-      day TEXT NOT NULL,
-      count INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (server_id, day),
-      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS access_state (
-      server_id TEXT PRIMARY KEY,
-      active_devices INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_access_daily_server_day ON access_daily_counts(server_id, day);
   `);
 
   // Migrations — add per-core CPU and temperature columns
@@ -241,29 +224,6 @@ function prepareStatements() {
   `);
   stmts.getMetrics = db.prepare('SELECT * FROM metrics WHERE server_id = ? AND timestamp >= ? ORDER BY timestamp ASC');
   stmts.cleanupOldMetrics = db.prepare('DELETE FROM metrics WHERE timestamp < ?');
-
-  // Access daily counts
-  stmts.getAccessState = db.prepare('SELECT * FROM access_state WHERE server_id = ?');
-  stmts.upsertAccessState = db.prepare(`
-    INSERT INTO access_state (server_id, active_devices, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(server_id) DO UPDATE SET
-      active_devices = excluded.active_devices,
-      updated_at = excluded.updated_at
-  `);
-  stmts.incrementAccessDaily = db.prepare(`
-    INSERT INTO access_daily_counts (server_id, day, count, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(server_id, day) DO UPDATE SET
-      count = count + excluded.count,
-      updated_at = excluded.updated_at
-  `);
-  stmts.getAccessDaily = db.prepare(`
-    SELECT day, count FROM access_daily_counts
-    WHERE server_id = ? AND day >= ?
-    ORDER BY day ASC
-  `);
-  stmts.cleanupOldAccessDaily = db.prepare('DELETE FROM access_daily_counts WHERE day < ?');
 
   // PM2 Apps
   stmts.deletePm2Apps = db.prepare('DELETE FROM pm2_apps WHERE server_id = ?');
@@ -486,60 +446,6 @@ function getMetrics(serverId, hours) {
 function cleanupOldMetrics() {
   const cutoff = Math.floor(Date.now() / 1000) - 48 * 3600;
   stmts.cleanupOldMetrics.run(cutoff);
-}
-
-function getLocalDayKey(timestamp) {
-  const d = new Date(timestamp * 1000);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function recordAccessSample(serverId, activeDevices, timestamp) {
-  if (!serverId || typeof activeDevices !== 'number' || !Number.isFinite(activeDevices)) {
-    return { day: null, delta: 0 };
-  }
-
-  const now = timestamp || Math.floor(Date.now() / 1000);
-  const currentActive = Math.max(0, Math.floor(activeDevices));
-  const prev = stmts.getAccessState.get(serverId);
-  const previousActive = prev ? Math.max(0, prev.active_devices || 0) : 0;
-  const delta = Math.max(0, currentActive - previousActive);
-  const day = getLocalDayKey(now);
-
-  const tx = db.transaction(() => {
-    if (delta > 0) {
-      stmts.incrementAccessDaily.run(serverId, day, delta, now);
-    }
-    stmts.upsertAccessState.run(serverId, currentActive, now);
-  });
-  tx();
-
-  return { day, delta };
-}
-
-function getAccessDaily(serverId, days) {
-  const count = Math.min(Math.max(parseInt(days, 10) || 7, 1), 7);
-  const now = new Date();
-  const rows = [];
-  const start = new Date(now);
-  start.setDate(now.getDate() - count + 1);
-
-  for (let i = 0; i < count; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    rows.push({ day: getLocalDayKey(Math.floor(d.getTime() / 1000)), count: 0 });
-  }
-
-  const existing = stmts.getAccessDaily.all(serverId, rows[0].day);
-  const byDay = new Map(existing.map(row => [row.day, row.count]));
-  return rows.map(row => ({ ...row, count: byDay.get(row.day) || 0 }));
-}
-
-function cleanupOldAccessDaily() {
-  const cutoff = getLocalDayKey(Math.floor(Date.now() / 1000) - 30 * 24 * 3600);
-  stmts.cleanupOldAccessDaily.run(cutoff);
 }
 
 // --- PM2 Apps ---
@@ -799,7 +705,6 @@ module.exports = {
   init, close,
   addServer, getServer, getServers, updateServer, updateServerStatus, deleteServer, findServerByIp, updateGpuNames,
   insertMetrics, getMetrics, cleanupOldMetrics, _rawInsertMetric,
-  recordAccessSample, getAccessDaily, cleanupOldAccessDaily,
   upsertPm2Apps, getPm2Apps,
   insertLogs, getLogs, cleanupExcessLogs,
   createGitPull, updateGitPull, getGitPull, getGitPulls, cleanupOldGitPulls,

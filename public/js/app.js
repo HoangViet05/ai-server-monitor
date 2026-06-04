@@ -438,8 +438,6 @@ const App = (() => {
     Charts.createChart('chart-cpu', 'CPU %', '#00e676', '%');
     Charts.createChart('chart-temp', 'Temperature', '#ff9100', '\u00b0C');
     Charts.createChart('chart-ram', 'RAM', '#448aff', 'GB');
-    Charts.createChart('chart-access', 'Access devices', '#00e5ff', '');
-    Charts.createBarChart('chart-access-daily', 'Access / day', '#ffd740', '', { ignoreTimeFilter: true });
     tempChartVisible = false;
     currentDetailMetrics = [];
 
@@ -465,7 +463,6 @@ const App = (() => {
         Charts.updateChart('chart-cpu', metrics, 'cpu_percent');
         Charts.updateChart('chart-temp', metrics, 'cpu_temp');
         Charts.updateChart('chart-ram', metrics, 'ram_used');
-        Charts.updateChart('chart-access', metrics, 'access_active_devices');
 
         // Update GPU charts if they exist
         if (Charts.hasChart('chart-igpu')) {
@@ -490,8 +487,6 @@ const App = (() => {
           updateAccessBadge(latest);
         }
       });
-
-    loadAccessDailyChart(serverId);
 
     // Load PM2 apps
     loadPm2Apps(serverId);
@@ -556,14 +551,6 @@ const App = (() => {
       { key: 'dgpu_percent' },
       { value: getDgpuMemPercent }
     ]);
-  }
-
-  function loadAccessDailyChart(serverId) {
-    fetch(`/api/servers/${serverId}/access-daily?days=7`)
-      .then(r => r.json())
-      .then(rows => {
-        Charts.updateBarChart('chart-access-daily', rows, 'day', 'count');
-      });
   }
 
   // Auto-detect GPU types from metric data when gpu_names is not yet available
@@ -979,10 +966,6 @@ const App = (() => {
         Charts.appendPoint('chart-cpu', ts, metrics.cpu_percent);
         Charts.appendPoint('chart-temp', ts, metrics.cpu_temp);
         Charts.appendPoint('chart-ram', ts, metrics.ram_used);
-        Charts.appendPoint('chart-access', ts, metrics.access_active_devices);
-        if ((metrics.access_daily_delta || 0) > 0) {
-          loadAccessDailyChart(serverId);
-        }
         if (metrics.cpu_temp != null) {
           currentDetailMetrics.push({ timestamp: ts, cpu_temp: metrics.cpu_temp });
           if (currentDetailMetrics.length > 17280) currentDetailMetrics.shift();
