@@ -1,8 +1,8 @@
 const { io } = require("socket.io-client");
 
 // Server base URL (không kèm namespace)
-// const BASE_URL = process.env.SOCKET_BASE_URL || "https://academy.arenabilliard.com"; //dev
-const BASE_URL = process.env.SOCKET_BASE_URL || "https://api-ai-prod.arenabilliard.com"; //prod
+const BASE_URL = process.env.SOCKET_BASE_URL || "https://academy.arenabilliard.com"; //dev
+// const BASE_URL = process.env.SOCKET_BASE_URL || "https://api-ai-prod.arenabilliard.com"; //prod
 
 // Scoreboard ID for testing — overridable via env var
 const SCOREBOARD_ID = process.env.SCOREBOARD_ID || "4ded13ec-93f2-4996-b003-4e2b317305d4";
